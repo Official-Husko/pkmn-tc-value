@@ -1,0 +1,12 @@
+{
+  "startupSyncEnabled": true,
+  "cardRefreshTTLHours": 48,
+  "imagePreviewsEnabled": true,
+  "saveCardImages": true,
+  "syncCardDetails": true,
+  "colorsEnabled": true,
+  "requestDelayMs": 1200,
+  "rateLimitCooldownSeconds": 30,
+  "saveSearchedCardsDefault": true,
+  "userAgent": "pkmn-tc-value/1.0 (+local CLI)"
+}
