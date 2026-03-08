@@ -3,9 +3,11 @@ package config
 func Default() Config {
 	return Config{
 		StartupSyncEnabled:       true,
+		Debug:                    false,
 		CardRefreshTTLHours:      48,
 		ImagePreviewsEnabled:     true,
-		SaveCardImages:           true,
+		ImageCaching:             true,
+		BackupImageSource:        false,
 		SyncCardDetails:          false,
 		ColorsEnabled:            true,
 		RequestDelayMs:           1200,

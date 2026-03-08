@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/Official-Husko/pkmn-tc-value/internal/catalog"
 	"github.com/Official-Husko/pkmn-tc-value/internal/config"
@@ -26,7 +27,7 @@ type SetSyncResult struct {
 }
 
 type SetSyncOptions struct {
-	SaveCardImages  bool
+	ImageCaching    bool
 	SyncCardDetails bool
 	Config          config.Config
 }
@@ -102,6 +103,10 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 
 	nextCards := make(map[string]domain.Card, len(remoteCards))
 	for _, remoteCard := range remoteCards {
+		cardSetCode := strings.TrimSpace(remoteCard.SetCode)
+		if cardSetCode == "" {
+			cardSetCode = strings.TrimSpace(set.SetCode)
+		}
 		remoteCanonical := util.NormalizeCardNumber(remoteCard.Number)
 		existing, ok := existingCards[remoteCard.ID]
 		if !ok {
@@ -121,7 +126,7 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 			ID:               remoteCard.ID,
 			SetID:            remoteCard.SetID,
 			SetName:          remoteCard.SetName,
-			SetCode:          remoteCard.SetCode,
+			SetCode:          cardSetCode,
 			Language:         remoteCard.Language,
 			Name:             remoteCard.Name,
 			Number:           remoteCard.Number,
@@ -145,7 +150,7 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 	}
 	sort.Strings(orderedIDs)
 
-	if opts.SaveCardImages && s.images != nil {
+	if opts.ImageCaching && s.images != nil {
 		total := len(orderedIDs)
 		done := 0
 		progress(SetSyncProgress{Stage: "images", Status: "Downloading card images", Done: done, Total: total})

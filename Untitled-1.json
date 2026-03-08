@@ -1,0 +1,66 @@
+{
+  "id": "sv3pt5-199",
+  "name": "Charizard ex",
+  "supertype": "Pokémon",
+  "subtypes": ["Stage 2", "ex"],
+  "types": ["Fire"],
+  "hp": "330",
+  "evolvesFrom": ["Charmeleon"],
+  "rules": [
+    "Pokémon ex rule: When your Pokémon ex is Knocked Out, your opponent takes 2 Prize cards."
+  ],
+  "attacks": [
+    {
+      "converted_energy_cost": 1,
+      "cost": ["Fire"],
+      "damage": "60+",
+      "name": "Brave Wing",
+      "text": "If this Pokémon has any damage counters on it, this attack does 100 more damage."
+    },
+    {
+      "converted_energy_cost": 4,
+      "cost": ["Fire", "Fire", "Fire", "Fire"],
+      "damage": "330",
+      "name": "Explosive Vortex",
+      "text": "Discard 3 Energy from this Pokémon."
+    }
+  ],
+  "weaknesses": [{ "type": "Water", "value": "×2" }],
+  "retreatCost": ["Colorless", "Colorless"],
+  "convertedRetreatCost": 2,
+  "number": "199",
+  "printedNumber": "199/165",
+  "rarity": "Special Illustration Rare",
+  "rarityCode": "SIR",
+  "artist": "miki kudo",
+  "legalities": [
+    { "format": "Standard", "status": "Legal" },
+    { "format": "Unlimited", "status": "Legal" },
+    { "format": "Expanded", "status": "Legal" },
+    { "format": "Gym Leader Challenge", "status": "Not Legal" }
+  ],
+  "nationalPokedexNumbers": [6],
+  "regulationMark": "G",
+  "images": {
+    "small": "https://images.scrydex.com/pokemon/sv3pt5-199/small",
+    "medium": "https://images.scrydex.com/pokemon/sv3pt5-199/medium",
+    "large": "https://images.scrydex.com/pokemon/sv3pt5-199/large"
+  },
+  "language": "English",
+  "languageCode": "EN",
+  "expansionSortOrder": 199,
+  "translation": {},
+  "pricing": {
+    "holofoil": {
+      "productId": 517045,
+      "lowPrice": 439.99,
+      "midPrice": 599.5,
+      "highPrice": 1000,
+      "marketPrice": 497.05,
+      "directLowPrice": 539.99,
+      "url": "https://partner.tcgplayer.com/c/6100701/1830156/21018?u=https%3A%2F%2Fwww.tcgplayer.com%2Fproduct%2F517045%2Fpokemon-sv-scarlet-and-violet-151-charizard-ex-199-165",
+      "subTypeValue": "Holofoil",
+      "updatedAt": "2026-03-08T11:58:45.323399Z"
+    }
+  }
+}

@@ -17,7 +17,7 @@ func NewCache(root string) *Cache {
 }
 
 func (c *Cache) Path(card domain.Card) string {
-	return filepath.Join(c.root, card.SetID, card.ID+".img")
+	return filepath.Join(c.root, card.SetID, card.ID+".png")
 }
 
 func (c *Cache) EnsureDir(card domain.Card) error {

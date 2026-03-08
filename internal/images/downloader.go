@@ -1,28 +1,47 @@
 package images
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/Official-Husko/pkmn-tc-value/internal/domain"
 	"github.com/Official-Husko/pkmn-tc-value/internal/store"
+	_ "golang.org/x/image/webp"
+	_ "image/gif"
+	_ "image/jpeg"
 )
 
 type Downloader struct {
-	client *http.Client
-	cache  *Cache
+	client            *http.Client
+	cache             *Cache
+	backupImageSource bool
+	debug             bool
+	debugLogPath      string
 }
 
-func NewDownloader(client *http.Client, cache *Cache) *Downloader {
-	return &Downloader{client: client, cache: cache}
+var errNoImageCandidates = errors.New("no image candidates available")
+
+func NewDownloader(client *http.Client, cache *Cache, backupImageSource bool, debug bool, debugLogPath string) *Downloader {
+	return &Downloader{
+		client:            client,
+		cache:             cache,
+		backupImageSource: backupImageSource,
+		debug:             debug,
+		debugLogPath:      debugLogPath,
+	}
 }
 
 func (d *Downloader) Ensure(ctx context.Context, card domain.Card) (string, error) {
-	if card.ImageURL == "" {
-		return "", nil
-	}
 	if err := d.cache.EnsureDir(card); err != nil {
 		return "", err
 	}
@@ -30,24 +49,196 @@ func (d *Downloader) Ensure(ctx context.Context, card domain.Card) (string, erro
 	if d.cache.Exists(card) {
 		return path, nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, card.ImageURL, nil)
+	converted, err := d.fetchCardImageAsPNG(ctx, card)
 	if err != nil {
-		return "", fmt.Errorf("build image request: %w", err)
+		if errors.Is(err, errNoImageCandidates) {
+			return "", nil
+		}
+		return "", err
 	}
-	resp, err := d.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("fetch image: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return "", fmt.Errorf("fetch image failed: %s", resp.Status)
-	}
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read image: %w", err)
-	}
-	if err := store.WriteFileAtomically(path, data, 0o600); err != nil {
+	if err := store.WriteFileAtomically(path, converted, 0o600); err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+func (d *Downloader) FetchTempPNG(ctx context.Context, card domain.Card) (string, error) {
+	converted, err := d.fetchCardImageAsPNG(ctx, card)
+	if err != nil {
+		if errors.Is(err, errNoImageCandidates) {
+			return "", nil
+		}
+		return "", err
+	}
+	file, err := os.CreateTemp("", "pkmn-card-*.png")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if _, err := file.Write(converted); err != nil {
+		file.Close()
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+func (d *Downloader) fetchAsPNG(ctx context.Context, imageURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build image request: %w", err)
+	}
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch image: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("fetch image failed: %s", resp.Status)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read image: %w", err)
+	}
+	converted, err := convertToPNG(data)
+	if err != nil {
+		return nil, fmt.Errorf("decode and convert image: %w", err)
+	}
+	return converted, nil
+}
+
+func (d *Downloader) fetchCardImageAsPNG(ctx context.Context, card domain.Card) ([]byte, error) {
+	candidates := imageURLCandidates(card, d.backupImageSource)
+	d.debugf(
+		"[images] card=%s set=%q setCode=%q language=%q number=%q backup=%t assembled_candidates=%v",
+		card.ID,
+		card.SetName,
+		card.SetCode,
+		card.Language,
+		card.Number,
+		d.backupImageSource,
+		candidates,
+	)
+	if len(candidates) == 0 {
+		d.debugf("[images] card=%s no image URL candidates", card.ID)
+		return nil, errNoImageCandidates
+	}
+
+	var failures []string
+	for _, candidate := range candidates {
+		d.debugf("[images] card=%s trying image URL: %s", card.ID, candidate)
+		converted, err := d.fetchAsPNG(ctx, candidate)
+		if err == nil {
+			d.debugf("[images] card=%s image fetch success: %s", card.ID, candidate)
+			return converted, nil
+		}
+		d.debugf("[images] card=%s image fetch failed: %s error=%v", card.ID, candidate, err)
+		failures = append(failures, fmt.Sprintf("%s (%v)", candidate, err))
+	}
+	return nil, fmt.Errorf("all image sources failed: %s", strings.Join(failures, "; "))
+}
+
+func (d *Downloader) debugf(format string, args ...any) {
+	if !d.debug {
+		return
+	}
+	path := strings.TrimSpace(d.debugLogPath)
+	if path == "" {
+		path = "debug.log"
+	}
+	line := fmt.Sprintf("%s %s\n", time.Now().Format(time.RFC3339), fmt.Sprintf(format, args...))
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	_, _ = file.WriteString(line)
+}
+
+func imageURLCandidates(card domain.Card, useBackup bool) []string {
+	primary := scrydexImageURL(card)
+	if !useBackup {
+		if strings.TrimSpace(primary) == "" {
+			return nil
+		}
+		return []string{primary}
+	}
+
+	out := make([]string, 0, 3)
+	seen := make(map[string]struct{})
+
+	appendURL := func(v string) {
+		value := strings.TrimSpace(v)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+
+	appendURL(primary)
+	appendURL(pokeDataTemplateImageURL(card.SetName, card.Number))
+	appendURL(card.ImageURL)
+	return out
+}
+
+func scrydexImageURL(card domain.Card) string {
+	setName := normalizeScrydexSetCode(card.SetCode)
+	number := strings.TrimSpace(card.Number)
+	if setName == "" || number == "" {
+		return ""
+	}
+	if isJapaneseLanguage(card.Language) && !strings.HasSuffix(setName, "_ja") {
+		setName += "_ja"
+	}
+	return fmt.Sprintf("https://images.scrydex.com/pokemon/%s-%s/large", url.PathEscape(setName), url.PathEscape(number))
+}
+
+func normalizeScrydexSetCode(setCode string) string {
+	code := strings.ToLower(strings.TrimSpace(setCode))
+	if code == "" {
+		return ""
+	}
+	// Scrydex set code segment is compact and lowercase.
+	code = strings.ReplaceAll(code, " ", "")
+	return code
+}
+
+func isJapaneseLanguage(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return false
+	}
+	if normalized == "ja" || normalized == "jp" {
+		return true
+	}
+	return strings.Contains(normalized, "japanese")
+}
+
+func pokeDataTemplateImageURL(setName string, cardNumber string) string {
+	set := strings.TrimSpace(setName)
+	number := strings.TrimSpace(cardNumber)
+	if set == "" || number == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://pokemoncardimages.pokedata.io/images/%s/%s.webp", url.QueryEscape(set), url.QueryEscape(number))
+}
+
+func convertToPNG(input []byte) ([]byte, error) {
+	decoded, _, err := image.Decode(bytes.NewReader(input))
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	if err := png.Encode(&out, decoded); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }

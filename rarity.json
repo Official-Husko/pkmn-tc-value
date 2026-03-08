@@ -1,0 +1,112 @@
+{
+    "metadata": {
+        "version": "1.0",
+        "lastUpdated": "2026-03-08",
+        "source": "https://pokescreener.com/_next/static/chunks/app/set/%5Bid%5D/card/%5Bnumber%5D/page-381e6dc4df60ee56.js"
+    },
+  "rarityAliases": {
+    "hr": "hyper rare",
+    "sir": "special illustration rare",
+    "ir": "illustration rare",
+    "ur": "ultra rare",
+    "as": "ace spec",
+    "dr": "double rare",
+    "hyper rare (hr)": "hyper rare",
+    "special illustration rare (sir)": "special illustration rare",
+    "illustration rare (ir)": "illustration rare",
+    "ultra rare (ur)": "ultra rare",
+    "ace spec (as)": "ace spec",
+    "double rare (dr)": "double rare",
+    "fa": "full art",
+    "fa-sp": "full art special"
+  },
+  "pullRates": {
+    "sv8pt5": {
+      "foil energy": "1 in 32 packs",
+      "double rare": "1 in 98 packs",
+      "ultra rare": "1 in 248 packs",
+      "illustration rare": "1 in 188 packs",
+      "special illustration rare": "1 in 225 packs",
+      "hyper rare": "1 in 154 packs"
+    },
+    "sv8": {
+      "hyper rare": "1 in 1127 packs",
+      "special illustration rare": "1 in 960 packs",
+      "illustration rare": "1 in 300 packs",
+      "ultra rare": "1 in 312 packs",
+      "ace spec": "1 in 159 packs"
+    },
+    "sv7": {
+      "hyper rare": "1 in 411 packs",
+      "special illustration rare": "1 in 540 packs",
+      "illustration rare": "1 in 167 packs",
+      "ultra rare": "1 in 163 packs",
+      "ace spec": "1 in 60 packs",
+      "double rare": "1 in 83 packs"
+    },
+    "sv6pt5": {
+      "illustration rare": "1 in 12 packs",
+      "full art": "1 in 24 packs",
+      "full art special": "1 in 36 packs",
+      "gold": "1 in 118 packs",
+      "special illustration rare": "1 in 64 packs"
+    },
+    "sv6": {
+      "hyper rare": "1 in 879 packs",
+      "special illustration rare": "1 in 941 packs",
+      "illustration rare": "1 in 272 packs",
+      "ultra rare": "1 in 318 packs",
+      "ace spec": "1 in 119 packs"
+    },
+    "sv5": {
+      "hyper rare": "1 in 836 packs",
+      "special illustration rare": "1 in 855 packs",
+      "illustration rare": "1 in 285 packs",
+      "ultra rare": "1 in 270 packs",
+      "double rare": "1 in 140 packs"
+    },
+    "sv4pt5": {
+      "hyper rare": "1 in 372 packs",
+      "special illustration rare": "1 in 465 packs",
+      "illustration rare": "1 in 42 packs",
+      "ultra rare": "1 in 76 packs",
+      "shiny ultra rare": "1 in 155 packs",
+      "shiny rare": "1 in 472 packs"
+    },
+    "sv4": {
+      "hyper rare": "1 in 576 packs",
+      "special illustration rare": "1 in 712 packs",
+      "illustration rare": "1 in 442 packs",
+      "ultra rare": "1 in 421 packs",
+      "double rare": "1 in 128 packs"
+    },
+    "sv3pt5": {
+      "hyper rare": "1 in 154 packs",
+      "special illustration rare": "1 in 225 packs",
+      "illustration rare": "1 in 1888 packs",
+      "ultra rare": "1 in 248 packs",
+      "double rare": "1 in 90 packs"
+    },
+    "sv3": {
+      "hyper rare": "1 in 156 packs",
+      "special illustration rare": "1 in 192 packs",
+      "illustration rare": "1 in 158 packs",
+      "ultra rare": "1 in 181 packs",
+      "double rare": "1 in 154 packs"
+    },
+    "sv2": {
+      "hyper rare": "1 in 512 packs",
+      "special illustration rare": "1 in 473 packs",
+      "illustration rare": "1 in 468 packs",
+      "ultra rare": "1 in 391 packs",
+      "double rare": "1 in 124 packs"
+    },
+    "sv1": {
+      "hyper rare": "1 in 324 packs",
+      "special illustration rare": "1 in 318 packs",
+      "illustration rare": "1 in 313 packs",
+      "ultra rare": "1 in 309 packs",
+      "double rare": "1 in 87 packs"
+    }
+  }
+}

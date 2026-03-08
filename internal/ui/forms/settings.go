@@ -1,21 +1,32 @@
 package forms
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
+	"io"
+	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/huh"
 
 	"github.com/Official-Husko/pkmn-tc-value/internal/config"
+	"github.com/Official-Husko/pkmn-tc-value/internal/images"
+	_ "golang.org/x/image/webp"
 )
 
 const (
+	imageCompatTestURL      = "https://pokemoncardimages.pokedata.io/images/Shiny+Treasure+ex/349.webp"
 	settingStartupSync      = "startup_sync"
 	settingCardRefreshTTL   = "card_refresh_ttl"
 	settingImagePreviews    = "image_previews"
-	settingSaveCardImages   = "save_card_images"
+	settingImageCompatTest  = "image_compat_test"
+	settingImageCaching     = "image_caching"
 	settingSyncCardDetails  = "sync_card_details"
 	settingColors           = "colors"
 	settingRequestDelay     = "request_delay"
@@ -26,7 +37,7 @@ const (
 	settingBackNoSave       = "back_no_save"
 )
 
-func SettingsForm(cfg config.Config, theme *huh.Theme) (config.Config, error) {
+func SettingsForm(cfg config.Config, renderer images.Renderer, theme *huh.Theme) (config.Config, error) {
 	next := cfg
 	for {
 		choice, err := pickSetting(next, theme)
@@ -78,11 +89,21 @@ func SettingsForm(cfg config.Config, theme *huh.Theme) (config.Config, error) {
 				return cfg, err
 			}
 			next.ImagePreviewsEnabled = value
-		case settingSaveCardImages:
+		case settingImageCompatTest:
+			visible, err := runImageCompatibilityTest(renderer, theme)
+			if err != nil {
+				if errors.Is(err, huh.ErrUserAborted) {
+					continue
+				}
+				return cfg, err
+			}
+			next.ImagePreviewsEnabled = visible
+			next.ImageCaching = visible
+		case settingImageCaching:
 			value, err := editBoolSetting(
-				"Save Card Images",
-				"When syncing a set database, download card images and store them in the local cache.",
-				next.SaveCardImages,
+				"Image Caching",
+				"Store converted PNG card images in the local cache for faster future views.",
+				next.ImageCaching,
 				theme,
 			)
 			if err != nil {
@@ -91,7 +112,7 @@ func SettingsForm(cfg config.Config, theme *huh.Theme) (config.Config, error) {
 				}
 				return cfg, err
 			}
-			next.SaveCardImages = value
+			next.ImageCaching = value
 		case settingSyncCardDetails:
 			value, err := editBoolSetting(
 				"Sync Card Details (prices)",
@@ -201,7 +222,8 @@ func pickSetting(cfg config.Config, theme *huh.Theme) (string, error) {
 					huh.NewOption(fmt.Sprintf("Startup sync: %s", onOff(cfg.StartupSyncEnabled)), settingStartupSync),
 					huh.NewOption(fmt.Sprintf("Card refresh TTL: %d hours", cfg.CardRefreshTTLHours), settingCardRefreshTTL),
 					huh.NewOption(fmt.Sprintf("Image previews: %s", onOff(cfg.ImagePreviewsEnabled)), settingImagePreviews),
-					huh.NewOption(fmt.Sprintf("Save card images: %s", onOff(cfg.SaveCardImages)), settingSaveCardImages),
+					huh.NewOption("Test image compatibility", settingImageCompatTest),
+					huh.NewOption(fmt.Sprintf("Image caching: %s", onOff(cfg.ImageCaching)), settingImageCaching),
 					huh.NewOption(fmt.Sprintf("Sync card details: %s", onOff(cfg.SyncCardDetails)), settingSyncCardDetails),
 					huh.NewOption(fmt.Sprintf("Colors: %s", onOff(cfg.ColorsEnabled)), settingColors),
 					huh.NewOption(fmt.Sprintf("Request delay: %d ms", cfg.RequestDelayMs), settingRequestDelay),
@@ -285,6 +307,91 @@ func editTextSetting(title, description string, current string, allowBlank bool,
 		}
 		return value, nil
 	}
+}
+
+func runImageCompatibilityTest(renderer images.Renderer, theme *huh.Theme) (bool, error) {
+	if renderer == nil {
+		return false, nil
+	}
+
+	path, err := downloadCompatibilityImage(imageCompatTestURL)
+	if err != nil {
+		return false, err
+	}
+	defer os.Remove(path)
+
+	rendered, renderErr := renderer.Render(path, 32, 12)
+	if rendered == "" {
+		rendered = "[image unavailable]"
+	}
+	description := "If you can see the sample image below, choose Visible.\n\n" + rendered
+	if renderErr != nil {
+		description += "\n\nRenderer error: " + renderErr.Error()
+	}
+	if err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewNote().
+				Title("Image Compatibility Test").
+				Description(description).
+				Next(true).
+				NextLabel("Continue"),
+		),
+	).WithTheme(theme).Run(); err != nil {
+		return false, err
+	}
+
+	var result string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Was the image visible?").
+				Description("This will automatically configure image preview and image download settings.").
+				Options(
+					huh.NewOption("Visible", "visible"),
+					huh.NewOption("Not visible", "not_visible"),
+				).
+				Value(&result),
+		),
+	).WithTheme(theme)
+	if err := form.Run(); err != nil {
+		return false, err
+	}
+	return result == "visible", nil
+}
+
+func downloadCompatibilityImage(imageURL string) (string, error) {
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Get(imageURL)
+	if err != nil {
+		return "", fmt.Errorf("download test image: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("download test image failed: %s", resp.Status)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read test image: %w", err)
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("decode test image: %w", err)
+	}
+	file, err := os.CreateTemp("", "pkmn-image-test-*.png")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if err := png.Encode(file, decoded); err != nil {
+		file.Close()
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
 }
 
 func showSettingsError(message string, theme *huh.Theme) error {

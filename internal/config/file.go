@@ -16,6 +16,7 @@ type Paths struct {
 	DBFile     string
 	LockFile   string
 	ImageDir   string
+	DebugLog   string
 }
 
 func ResolvePaths() (Paths, error) {
@@ -30,6 +31,7 @@ func ResolvePaths() (Paths, error) {
 		DBFile:     filepath.Join(root, "db.json"),
 		LockFile:   filepath.Join(root, "db.lock"),
 		ImageDir:   filepath.Join(root, "cards"),
+		DebugLog:   filepath.Join(root, "debug.log"),
 	}, nil
 }
 
@@ -50,6 +52,15 @@ func LoadOrCreate(path string) (Config, error) {
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config file: %w", err)
+	}
+	var legacy struct {
+		ImageCaching   *bool `json:"imageCaching"`
+		SaveCardImages *bool `json:"saveCardImages"`
+	}
+	if err := json.Unmarshal(data, &legacy); err == nil {
+		if legacy.ImageCaching == nil && legacy.SaveCardImages != nil {
+			cfg.ImageCaching = *legacy.SaveCardImages
+		}
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

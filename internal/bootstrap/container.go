@@ -40,7 +40,7 @@ func New(cfg config.Config, paths config.Paths, db *store.Store) *Container {
 	catalogProvider := pokedata.New(httpClient, time.Duration(cfg.RateLimitCooldownSeconds)*time.Second)
 	priceProvider := pricedata.New(httpClient)
 	cache := images.NewCache(paths.ImageDir)
-	downloader := images.NewDownloader(httpClient, cache)
+	downloader := images.NewDownloader(httpClient, cache, cfg.BackupImageSource, cfg.Debug, paths.DebugLog)
 
 	return &Container{
 		Config:      cfg,

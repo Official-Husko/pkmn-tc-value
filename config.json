@@ -1,12 +1,14 @@
 {
   "startupSyncEnabled": true,
+  "debug": true,
   "cardRefreshTTLHours": 48,
   "imagePreviewsEnabled": true,
-  "saveCardImages": true,
-  "syncCardDetails": true,
+  "imageCaching": true,
+  "backup_image_source": false,
+  "syncCardDetails": false,
   "colorsEnabled": true,
   "requestDelayMs": 1200,
   "rateLimitCooldownSeconds": 30,
   "saveSearchedCardsDefault": true,
-  "userAgent": "pkmn-tc-value/1.0 (+local CLI)"
+  "userAgent": "pkmn-tc-value/1.0 (by Official Husko on GitHub)"
 }

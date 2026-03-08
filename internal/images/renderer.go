@@ -9,6 +9,8 @@ import (
 
 type Renderer interface {
 	Supported() bool
+	Protocol() termimg.Protocol
+	ClearAllString() string
 	Render(path string, maxWidth int, maxHeight int) (string, error)
 }
 
@@ -17,13 +19,29 @@ type TermimgRenderer struct {
 }
 
 func NewRenderer() Renderer {
+	protocol := termimg.Unsupported
+	for _, candidate := range termimg.DetermineProtocols() {
+		if candidate == termimg.Halfblocks || candidate == termimg.Unsupported {
+			continue
+		}
+		protocol = candidate
+		break
+	}
 	return TermimgRenderer{
-		protocol: termimg.DetectProtocol(),
+		protocol: protocol,
 	}
 }
 
 func (r TermimgRenderer) Supported() bool {
-	return true
+	return r.protocol != termimg.Unsupported
+}
+
+func (r TermimgRenderer) Protocol() termimg.Protocol {
+	return r.protocol
+}
+
+func (r TermimgRenderer) ClearAllString() string {
+	return termimg.ClearAllString()
 }
 
 func (r TermimgRenderer) Render(path string, maxWidth int, maxHeight int) (string, error) {
@@ -32,6 +50,9 @@ func (r TermimgRenderer) Render(path string, maxWidth int, maxHeight int) (strin
 	}
 	if _, err := os.Stat(path); err != nil {
 		return "[image unavailable]", nil
+	}
+	if !r.Supported() {
+		return "[image unavailable]", fmt.Errorf("no supported graphics protocol (halfblocks disabled)")
 	}
 
 	img, err := termimg.Open(path)
@@ -51,6 +72,10 @@ func (r TermimgRenderer) Render(path string, maxWidth int, maxHeight int) (strin
 		Width(maxWidth).
 		Height(maxHeight).
 		Scale(termimg.ScaleFit).
+		Dither(true).
+		DitherMode(termimg.DitherFloydSteinberg).
+		Compression(true).
+		PNG(true).
 		Render()
 	if err != nil {
 		return "[image unavailable]", fmt.Errorf("render image for terminal: %w", err)
