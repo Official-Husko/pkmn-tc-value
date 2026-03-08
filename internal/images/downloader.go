@@ -114,12 +114,13 @@ func (d *Downloader) fetchAsPNG(ctx context.Context, imageURL string) ([]byte, e
 func (d *Downloader) fetchCardImageAsPNG(ctx context.Context, card domain.Card) ([]byte, error) {
 	candidates := imageURLCandidates(card, d.backupImageSource)
 	d.debugf(
-		"[images] card=%s set=%q setCode=%q language=%q number=%q backup=%t assembled_candidates=%v",
+		"[images] card=%s set=%q setCode=%q language=%q number=%q imageBase=%q backup=%t assembled_candidates=%v",
 		card.ID,
 		card.SetName,
 		card.SetCode,
 		card.Language,
 		card.Number,
+		card.ImageBaseURL,
 		d.backupImageSource,
 		candidates,
 	)
@@ -160,7 +161,7 @@ func (d *Downloader) debugf(format string, args ...any) {
 }
 
 func imageURLCandidates(card domain.Card, useBackup bool) []string {
-	primary := scrydexImageURL(card)
+	primary := tcgdexImageURL(card)
 	if !useBackup {
 		if strings.TrimSpace(primary) == "" {
 			return nil
@@ -184,9 +185,18 @@ func imageURLCandidates(card domain.Card, useBackup bool) []string {
 	}
 
 	appendURL(primary)
+	appendURL(scrydexImageURL(card))
 	appendURL(pokeDataTemplateImageURL(card.SetName, card.Number))
 	appendURL(card.ImageURL)
 	return out
+}
+
+func tcgdexImageURL(card domain.Card) string {
+	base := strings.TrimSpace(card.ImageBaseURL)
+	if base == "" {
+		return ""
+	}
+	return strings.TrimRight(base, "/") + "/high.png"
 }
 
 func scrydexImageURL(card domain.Card) string {

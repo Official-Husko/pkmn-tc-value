@@ -206,13 +206,8 @@ func (m *rootModel) Init() tea.Cmd {
 		return tea.Quit
 	}
 
-	if m.container.Config.StartupSyncEnabled {
-		m.mode = modeStartupSync
-		return tea.Batch(m.spinner.Tick, m.startStartupSyncCmd())
-	}
-
-	m.openMainMenu()
-	return nil
+	m.mode = modeStartupSync
+	return tea.Batch(m.spinner.Tick, m.startStartupSyncCmd())
 }
 
 func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -617,7 +612,8 @@ func (m *rootModel) onMenuSelect(value string) tea.Cmd {
 			m.fatalErr = err
 			return tea.Quit
 		}
-		if cached {
+		needsMetadataBackfill := strings.TrimSpace(set.SetCode) == ""
+		if cached && !needsMetadataBackfill {
 			m.openCardLookupInput()
 			return nil
 		}
@@ -949,7 +945,6 @@ func (m *rootModel) openSettingsMenu() {
 		"Settings",
 		"Select one option to edit.",
 		[]menuOption{
-			{Label: "Startup sync: " + onOff(m.settingsDraft.StartupSyncEnabled), Value: "startup_sync"},
 			{Label: "Debug logging: " + onOff(m.settingsDraft.Debug), Value: "debug"},
 			{Label: fmt.Sprintf("Card refresh TTL: %d hours", m.settingsDraft.CardRefreshTTLHours), Value: "card_refresh_ttl"},
 			{Label: "Image previews: " + onOff(m.settingsDraft.ImagePreviewsEnabled), Value: "image_previews"},
@@ -973,9 +968,6 @@ func (m *rootModel) openSettingsMenu() {
 
 func (m *rootModel) onSettingsMenuSelect(value string) tea.Cmd {
 	switch value {
-	case "startup_sync":
-		m.openBoolSetting("startup_sync", "Startup Sync", "Fetch the latest set catalog when the app starts.", m.settingsDraft.StartupSyncEnabled)
-		return nil
 	case "debug":
 		m.openBoolSetting("debug", "Debug Logging", "Write detailed diagnostics to debug.log in the project folder.", m.settingsDraft.Debug)
 		return nil

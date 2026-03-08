@@ -8,9 +8,11 @@ type Money struct {
 }
 
 type PriceSnapshot struct {
-	Ungraded    *Money    `json:"ungraded,omitempty"`
-	PSA10       *Money    `json:"psa10,omitempty"`
-	SourceURL   string    `json:"sourceUrl,omitempty"`
-	CheckedAt   time.Time `json:"checkedAt"`
-	MatchedName string    `json:"matchedName,omitempty"`
+	Ungraded             *Money    `json:"ungraded,omitempty"`
+	PSA10                *Money    `json:"psa10,omitempty"`
+	SourceURL            string    `json:"sourceUrl,omitempty"`
+	CheckedAt            time.Time `json:"checkedAt"`
+	MatchedName          string    `json:"matchedName,omitempty"`
+	PriceProviderCardID  string    `json:"priceProviderCardId,omitempty"`
+	PriceProviderSetName string    `json:"priceProviderSetName,omitempty"`
 }

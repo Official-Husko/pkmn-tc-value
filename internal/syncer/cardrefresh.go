@@ -49,6 +49,13 @@ func (s *CardRefreshService) Refresh(ctx context.Context, card domain.Card, set 
 		persisted.PSA10Price = snapshot.PSA10
 		persisted.PriceSourceURL = snapshot.SourceURL
 		persisted.PriceCheckedAt = &snapshot.CheckedAt
+		if strings.TrimSpace(snapshot.PriceProviderCardID) != "" {
+			card.PriceProviderCardID = snapshot.PriceProviderCardID
+			persisted.PriceProviderCardID = snapshot.PriceProviderCardID
+		}
+		if strings.TrimSpace(snapshot.PriceProviderSetName) != "" {
+			set.PriceProviderSetName = snapshot.PriceProviderSetName
+		}
 	}
 	if strings.TrimSpace(card.SetCode) == "" {
 		card.SetCode = set.SetCode
@@ -81,6 +88,15 @@ func (s *CardRefreshService) Refresh(ctx context.Context, card domain.Card, set 
 			db.CardsBySet[persisted.SetID] = make(map[string]domain.Card)
 		}
 		db.CardsBySet[persisted.SetID][persisted.ID] = persisted
+		if currentSet, ok := db.Sets[persisted.SetID]; ok {
+			if strings.TrimSpace(currentSet.SetCode) == "" && strings.TrimSpace(set.SetCode) != "" {
+				currentSet.SetCode = set.SetCode
+			}
+			if strings.TrimSpace(currentSet.PriceProviderSetName) == "" && strings.TrimSpace(set.PriceProviderSetName) != "" {
+				currentSet.PriceProviderSetName = set.PriceProviderSetName
+			}
+			db.Sets[persisted.SetID] = currentSet
+		}
 		return nil
 	})
 	return card, err

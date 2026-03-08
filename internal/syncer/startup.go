@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Official-Husko/pkmn-tc-value/internal/catalog"
@@ -50,23 +51,55 @@ func (s *StartupService) Run(ctx context.Context, progress func(StartupProgress)
 			if printedTotal == 0 && ok {
 				printedTotal = existing.PrintedTotal
 			}
+			setCode := strings.TrimSpace(remote.SetCode)
+			if setCode == "" && ok {
+				setCode = strings.TrimSpace(existing.SetCode)
+			}
+			priceProviderSetName := strings.TrimSpace(remote.PriceProviderSetName)
+			if priceProviderSetName == "" && ok {
+				priceProviderSetName = strings.TrimSpace(existing.PriceProviderSetName)
+			}
 			if !ok {
 				stats.NewSets++
 			} else if existing.Name != remote.Name || existing.Total != total || existing.ReleaseDate != remote.ReleaseDate {
 				stats.UpdatedSets++
 			}
 			db.Sets[remote.ID] = domain.Set{
-				ID:               remote.ID,
-				Language:         remote.Language,
-				Name:             remote.Name,
-				SetCode:          remote.SetCode,
-				Series:           remote.Series,
-				PrintedTotal:     printedTotal,
-				Total:            total,
-				ReleaseDate:      remote.ReleaseDate,
-				SymbolURL:        remote.SymbolURL,
-				LogoURL:          remote.LogoURL,
-				CatalogUpdatedAt: remote.CatalogUpdatedAt,
+				ID:                   remote.ID,
+				Language:             remote.Language,
+				Name:                 remote.Name,
+				SetCode:              setCode,
+				PriceProviderSetName: priceProviderSetName,
+				Series:               remote.Series,
+				PrintedTotal:         printedTotal,
+				Total:                total,
+				ReleaseDate:          remote.ReleaseDate,
+				SymbolURL:            remote.SymbolURL,
+				LogoURL:              remote.LogoURL,
+				CatalogUpdatedAt:     remote.CatalogUpdatedAt,
+			}
+
+			if setCode != "" {
+				if cards, ok := db.CardsBySet[remote.ID]; ok {
+					for cardID, card := range cards {
+						updated := false
+						if strings.TrimSpace(card.SetCode) == "" {
+							card.SetCode = setCode
+							updated = true
+						}
+						if strings.TrimSpace(card.SetName) == "" && strings.TrimSpace(remote.Name) != "" {
+							card.SetName = remote.Name
+							updated = true
+						}
+						if strings.TrimSpace(card.Language) == "" && strings.TrimSpace(remote.Language) != "" {
+							card.Language = remote.Language
+							updated = true
+						}
+						if updated {
+							cards[cardID] = card
+						}
+					}
+				}
 			}
 		}
 		db.SyncState.LastStartupSyncAt = &now

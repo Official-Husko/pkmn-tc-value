@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	bridgepokedata "github.com/Official-Husko/pkmn-tc-value/internal/bridge/pokedata"
 	"github.com/Official-Husko/pkmn-tc-value/internal/catalog"
 	"github.com/Official-Husko/pkmn-tc-value/internal/config"
 	"github.com/Official-Husko/pkmn-tc-value/internal/domain"
@@ -40,14 +41,15 @@ type SetSyncProgress struct {
 }
 
 type SetSyncService struct {
-	store   *store.Store
-	catalog catalog.Provider
-	pricing pricing.Provider
-	images  *images.Downloader
+	store       *store.Store
+	catalog     catalog.Provider
+	pricing     pricing.Provider
+	images      *images.Downloader
+	priceBridge *bridgepokedata.Resolver
 }
 
-func NewSetSyncService(s *store.Store, c catalog.Provider, p pricing.Provider, i *images.Downloader) *SetSyncService {
-	return &SetSyncService{store: s, catalog: c, pricing: p, images: i}
+func NewSetSyncService(s *store.Store, c catalog.Provider, p pricing.Provider, i *images.Downloader, bridge *bridgepokedata.Resolver) *SetSyncService {
+	return &SetSyncService{store: s, catalog: c, pricing: p, images: i, priceBridge: bridge}
 }
 
 func (s *SetSyncService) IsSetCached(setID string) (bool, error) {
@@ -81,6 +83,18 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 	remoteCards, err := s.catalog.FetchCardsForSet(ctx, setID)
 	if err != nil {
 		return SetSyncResult{}, err
+	}
+	matchedPriceSetName := strings.TrimSpace(set.PriceProviderSetName)
+	cardPriceIDByRemoteID := make(map[string]string, len(remoteCards))
+	if s.priceBridge != nil {
+		if resolvedSetName, matches, mapErr := s.priceBridge.MapSetCards(ctx, set, remoteCards); mapErr == nil {
+			if strings.TrimSpace(resolvedSetName) != "" {
+				matchedPriceSetName = strings.TrimSpace(resolvedSetName)
+			}
+			for remoteID, priceID := range matches {
+				cardPriceIDByRemoteID[remoteID] = strings.TrimSpace(priceID)
+			}
+		}
 	}
 
 	result := SetSyncResult{
@@ -117,30 +131,42 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 				}
 			}
 		}
+		if cardSetCode == "" {
+			cardSetCode = strings.TrimSpace(existing.SetCode)
+		}
+		priceProviderCardID := strings.TrimSpace(cardPriceIDByRemoteID[remoteCard.ID])
+		if priceProviderCardID == "" {
+			priceProviderCardID = strings.TrimSpace(remoteCard.PriceProviderCardID)
+		}
+		if priceProviderCardID == "" {
+			priceProviderCardID = strings.TrimSpace(existing.PriceProviderCardID)
+		}
 		if existing.ID == "" {
 			result.NewCards++
-		} else if existing.Name != remoteCard.Name || existing.Rarity != remoteCard.Rarity || existing.ImageURL != remoteCard.ImageURL {
+		} else if existing.Name != remoteCard.Name || existing.Rarity != remoteCard.Rarity || existing.ImageBaseURL != remoteCard.ImageBaseURL || existing.ImageURL != remoteCard.ImageURL || existing.PriceProviderCardID != priceProviderCardID {
 			result.UpdatedCards++
 		}
 		nextCards[remoteCard.ID] = domain.Card{
-			ID:               remoteCard.ID,
-			SetID:            remoteCard.SetID,
-			SetName:          remoteCard.SetName,
-			SetCode:          cardSetCode,
-			Language:         remoteCard.Language,
-			Name:             remoteCard.Name,
-			Number:           remoteCard.Number,
-			ReleaseDate:      remoteCard.ReleaseDate,
-			Secret:           remoteCard.Secret,
-			TCGPlayerID:      remoteCard.TCGPlayerID,
-			Rarity:           remoteCard.Rarity,
-			ImageURL:         remoteCard.ImageURL,
-			ImagePath:        existing.ImagePath,
-			UngradedPrice:    existing.UngradedPrice,
-			PSA10Price:       existing.PSA10Price,
-			PriceSourceURL:   existing.PriceSourceURL,
-			PriceCheckedAt:   existing.PriceCheckedAt,
-			CatalogUpdatedAt: remoteCard.CatalogUpdatedAt,
+			ID:                  remoteCard.ID,
+			SetID:               remoteCard.SetID,
+			SetName:             remoteCard.SetName,
+			SetCode:             cardSetCode,
+			PriceProviderCardID: priceProviderCardID,
+			Language:            remoteCard.Language,
+			Name:                remoteCard.Name,
+			Number:              remoteCard.Number,
+			ReleaseDate:         remoteCard.ReleaseDate,
+			Secret:              remoteCard.Secret,
+			TCGPlayerID:         remoteCard.TCGPlayerID,
+			Rarity:              remoteCard.Rarity,
+			ImageBaseURL:        remoteCard.ImageBaseURL,
+			ImageURL:            remoteCard.ImageURL,
+			ImagePath:           existing.ImagePath,
+			UngradedPrice:       existing.UngradedPrice,
+			PSA10Price:          existing.PSA10Price,
+			PriceSourceURL:      existing.PriceSourceURL,
+			PriceCheckedAt:      existing.PriceCheckedAt,
+			CatalogUpdatedAt:    remoteCard.CatalogUpdatedAt,
 		}
 	}
 
@@ -149,6 +175,17 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 		orderedIDs = append(orderedIDs, cardID)
 	}
 	sort.Strings(orderedIDs)
+
+	discoveredSetCode := strings.TrimSpace(set.SetCode)
+	if discoveredSetCode == "" {
+		for _, cardID := range orderedIDs {
+			candidate := strings.TrimSpace(nextCards[cardID].SetCode)
+			if candidate != "" {
+				discoveredSetCode = candidate
+				break
+			}
+		}
+	}
 
 	if opts.ImageCaching && s.images != nil {
 		total := len(orderedIDs)
@@ -203,6 +240,12 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 		db.CardsBySet[setID] = nextCards
 		setRecord := db.Sets[setID]
 		setRecord.Total = len(nextCards)
+		if discoveredSetCode != "" {
+			setRecord.SetCode = discoveredSetCode
+		}
+		if matchedPriceSetName != "" {
+			setRecord.PriceProviderSetName = matchedPriceSetName
+		}
 		db.Sets[setID] = setRecord
 		return nil
 	})

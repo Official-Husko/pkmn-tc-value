@@ -6,7 +6,7 @@ import (
 	"github.com/Official-Husko/pkmn-tc-value/internal/domain"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 type Meta struct {
 	SchemaVersion int       `json:"schemaVersion"`
@@ -31,7 +31,7 @@ func NewDB() *DB {
 			UpdatedAt:     now,
 		},
 		SyncState: domain.SyncState{
-			CatalogProvider: "pokedata",
+			CatalogProvider: "tcgdex",
 			PriceProvider:   "pokedata",
 		},
 		Sets:       make(map[string]domain.Set),

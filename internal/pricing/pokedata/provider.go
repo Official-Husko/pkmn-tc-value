@@ -20,24 +20,44 @@ import (
 const statsEndpoint = "https://www.pokedata.io/api/cards/stats"
 
 type Provider struct {
-	client *http.Client
+	client   *http.Client
+	resolver cardIDResolver
+	endpoint string
 
 	mu          sync.Mutex
 	lastRequest time.Time
 }
 
-func New(client *http.Client) pricing.Provider {
-	return &Provider{client: client}
+type cardIDResolver interface {
+	ResolveCardID(ctx context.Context, set domain.Set, card domain.Card) (string, string, error)
+}
+
+func New(client *http.Client, resolver cardIDResolver) pricing.Provider {
+	return &Provider{client: client, resolver: resolver, endpoint: statsEndpoint}
 }
 
 func (p *Provider) Name() string {
 	return "pokedata"
 }
 
-func (p *Provider) RefreshCard(ctx context.Context, card domain.Card, _ domain.Set, cfg config.Config) (domain.PriceSnapshot, error) {
-	cardID, err := strconv.Atoi(card.ID)
+func (p *Provider) RefreshCard(ctx context.Context, card domain.Card, set domain.Set, cfg config.Config) (domain.PriceSnapshot, error) {
+	priceProviderCardID := strings.TrimSpace(card.PriceProviderCardID)
+	resolvedSetName := ""
+	if priceProviderCardID == "" && p.resolver != nil {
+		resolvedID, resolvedSet, resolveErr := p.resolver.ResolveCardID(ctx, set, card)
+		if resolveErr != nil {
+			return domain.PriceSnapshot{}, resolveErr
+		}
+		priceProviderCardID = strings.TrimSpace(resolvedID)
+		resolvedSetName = strings.TrimSpace(resolvedSet)
+	}
+	if priceProviderCardID == "" {
+		return domain.PriceSnapshot{}, fmt.Errorf("missing price provider card id for %s", card.ID)
+	}
+
+	cardID, err := strconv.Atoi(priceProviderCardID)
 	if err != nil {
-		return domain.PriceSnapshot{}, fmt.Errorf("parse card id %q: %w", card.ID, err)
+		return domain.PriceSnapshot{}, fmt.Errorf("parse provider card id %q: %w", priceProviderCardID, err)
 	}
 
 	if err := p.wait(ctx, cfg.RequestDelayMs); err != nil {
@@ -47,7 +67,7 @@ func (p *Provider) RefreshCard(ctx context.Context, card domain.Card, _ domain.S
 	values := url.Values{}
 	values.Set("id", strconv.Itoa(cardID))
 
-	endpoint := statsEndpoint + "?" + values.Encode()
+	endpoint := p.endpoint + "?" + values.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return domain.PriceSnapshot{}, fmt.Errorf("build request: %w", err)
@@ -71,10 +91,12 @@ func (p *Provider) RefreshCard(ctx context.Context, card domain.Card, _ domain.S
 	psa10 := pickSource(entries, 10.0)
 
 	return domain.PriceSnapshot{
-		Ungraded:  ungraded,
-		PSA10:     psa10,
-		SourceURL: endpoint,
-		CheckedAt: checkedAt,
+		Ungraded:             ungraded,
+		PSA10:                psa10,
+		SourceURL:            endpoint,
+		CheckedAt:            checkedAt,
+		PriceProviderCardID:  priceProviderCardID,
+		PriceProviderSetName: resolvedSetName,
 	}, nil
 }
 

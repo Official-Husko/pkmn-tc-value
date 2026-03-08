@@ -1,9 +1,11 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -26,10 +28,11 @@ func Load(path string) (*Store, error) {
 	if err := json.Unmarshal(data, db); err != nil {
 		return nil, fmt.Errorf("decode database: %w", err)
 	}
-	db.ensureMaps()
-	if db.Meta.SchemaVersion == 0 {
-		db.Meta.SchemaVersion = SchemaVersion
+	if db.Meta.SchemaVersion != SchemaVersion {
+		_ = backupLegacyDB(path, data, db.Meta.SchemaVersion)
+		return &Store{path: path, db: NewDB()}, nil
 	}
+	db.ensureMaps()
 	return &Store{path: path, db: db}, nil
 }
 
@@ -53,9 +56,29 @@ func (s *Store) Update(fn func(*DB) error) error {
 	}
 	s.db.ensureMaps()
 	s.db.Meta.UpdatedAt = time.Now().UTC()
-	data, err := json.MarshalIndent(s.db, "", "  ")
+	data, err := marshalIndentNoEscapeHTML(s.db)
 	if err != nil {
 		return fmt.Errorf("encode database: %w", err)
 	}
 	return WriteFileAtomically(s.path, data, 0o600)
+}
+
+func marshalIndentNoEscapeHTML(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
+func backupLegacyDB(path string, data []byte, schemaVersion int) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	timestamp := time.Now().UTC().Format("20060102T150405Z")
+	backupName := fmt.Sprintf("%s.schema-%d.%s.bak", base, schemaVersion, timestamp)
+	backupPath := filepath.Join(dir, backupName)
+	return WriteFileAtomically(backupPath, data, 0o600)
 }

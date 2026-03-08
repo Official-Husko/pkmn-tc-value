@@ -4,8 +4,9 @@ import (
 	"net/http"
 	"time"
 
+	bridgepokedata "github.com/Official-Husko/pkmn-tc-value/internal/bridge/pokedata"
 	"github.com/Official-Husko/pkmn-tc-value/internal/catalog"
-	"github.com/Official-Husko/pkmn-tc-value/internal/catalog/pokedata"
+	"github.com/Official-Husko/pkmn-tc-value/internal/catalog/tcgdex"
 	"github.com/Official-Husko/pkmn-tc-value/internal/config"
 	"github.com/Official-Husko/pkmn-tc-value/internal/images"
 	"github.com/Official-Husko/pkmn-tc-value/internal/pricing"
@@ -16,14 +17,15 @@ import (
 )
 
 type Container struct {
-	Config     config.Config
-	Paths      config.Paths
-	Store      *store.Store
-	Catalog    catalog.Provider
-	Pricing    pricing.Provider
-	ImageCache *images.Cache
-	Images     *images.Downloader
-	Renderer   images.Renderer
+	Config      config.Config
+	Paths       config.Paths
+	Store       *store.Store
+	Catalog     catalog.Provider
+	PriceBridge *bridgepokedata.Resolver
+	Pricing     pricing.Provider
+	ImageCache  *images.Cache
+	Images      *images.Downloader
+	Renderer    images.Renderer
 
 	Sets       *repository.SetsRepo
 	Cards      *repository.CardsRepo
@@ -37,8 +39,9 @@ type Container struct {
 
 func New(cfg config.Config, paths config.Paths, db *store.Store) *Container {
 	httpClient := &http.Client{Timeout: 30 * time.Second}
-	catalogProvider := pokedata.New(httpClient, time.Duration(cfg.RateLimitCooldownSeconds)*time.Second)
-	priceProvider := pricedata.New(httpClient)
+	catalogProvider := tcgdex.New(httpClient)
+	priceBridge := bridgepokedata.NewResolver(httpClient, time.Duration(cfg.RateLimitCooldownSeconds)*time.Second)
+	priceProvider := pricedata.New(httpClient, priceBridge)
 	cache := images.NewCache(paths.ImageDir)
 	downloader := images.NewDownloader(httpClient, cache, cfg.BackupImageSource, cfg.Debug, paths.DebugLog)
 
@@ -47,6 +50,7 @@ func New(cfg config.Config, paths config.Paths, db *store.Store) *Container {
 		Paths:       paths,
 		Store:       db,
 		Catalog:     catalogProvider,
+		PriceBridge: priceBridge,
 		Pricing:     priceProvider,
 		ImageCache:  cache,
 		Images:      downloader,
@@ -56,7 +60,7 @@ func New(cfg config.Config, paths config.Paths, db *store.Store) *Container {
 		Collection:  repository.NewCollectionRepo(db),
 		SyncState:   repository.NewSyncStateRepo(db),
 		StartupSync: syncer.NewStartupService(db, catalogProvider),
-		SetSync:     syncer.NewSetSyncService(db, catalogProvider, priceProvider, downloader),
+		SetSync:     syncer.NewSetSyncService(db, catalogProvider, priceProvider, downloader, priceBridge),
 		CardRefresh: syncer.NewCardRefreshService(db, priceProvider, downloader),
 	}
 }

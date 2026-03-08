@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ type Provider struct {
 
 	mu          sync.RWMutex
 	setNameByID map[string]string
+	setCodeByID map[string]string
 }
 
 func New(client *http.Client, cooldown time.Duration) catalog.Provider {
@@ -39,6 +41,7 @@ func New(client *http.Client, cooldown time.Duration) catalog.Provider {
 		client:      client,
 		cooldown:    cooldown,
 		setNameByID: make(map[string]string),
+		setCodeByID: make(map[string]string),
 	}
 }
 
@@ -63,7 +66,8 @@ func (p *Provider) FetchSets(ctx context.Context) ([]domain.RemoteSet, error) {
 		setInfo = payload.Props.PageProps.SetInfoArr
 	}
 	sets := make([]domain.RemoteSet, 0, len(setInfo))
-	nextMap := make(map[string]string, len(setInfo))
+	nextNameMap := make(map[string]string, len(setInfo))
+	nextCodeMap := make(map[string]string, len(setInfo))
 	for _, dto := range setInfo {
 		if !dto.Live {
 			continue
@@ -71,12 +75,21 @@ func (p *Provider) FetchSets(ctx context.Context) ([]domain.RemoteSet, error) {
 		id := strconv.Itoa(dto.ID)
 		name := util.DecodeEscapedText(dto.Name)
 		series := util.DecodeEscapedText(dto.Series)
-		nextMap[id] = name
+		setCode := util.DecodeEscapedText(firstNonBlank(
+			anyToString(dto.SetCode),
+			anyToString(dto.SetCodeCamel),
+			anyToString(dto.Code),
+			dto.Abbrev,
+			dto.PTCGOCode,
+			dto.PTCGOCodeCamel,
+		))
+		nextNameMap[id] = name
+		nextCodeMap[id] = setCode
 		sets = append(sets, domain.RemoteSet{
 			ID:           id,
 			Language:     util.DecodeEscapedText(dto.Language),
 			Name:         name,
-			SetCode:      util.DecodeEscapedText(anyToString(dto.Code)),
+			SetCode:      setCode,
 			Series:       series,
 			ReleaseDate:  dto.ReleaseDate,
 			SymbolURL:    dto.SymbolImgURL,
@@ -87,7 +100,8 @@ func (p *Provider) FetchSets(ctx context.Context) ([]domain.RemoteSet, error) {
 	}
 
 	p.mu.Lock()
-	p.setNameByID = nextMap
+	p.setNameByID = nextNameMap
+	p.setCodeByID = nextCodeMap
 	p.mu.Unlock()
 
 	return sets, nil
@@ -95,14 +109,19 @@ func (p *Provider) FetchSets(ctx context.Context) ([]domain.RemoteSet, error) {
 
 func (p *Provider) FetchCardsForSet(ctx context.Context, setID string) ([]domain.RemoteCard, error) {
 	setName, ok := p.getSetName(setID)
+	setCode, codeOK := p.getSetCode(setID)
 	if !ok {
 		if _, err := p.FetchSets(ctx); err != nil {
 			return nil, err
 		}
 		setName, ok = p.getSetName(setID)
+		setCode, codeOK = p.getSetCode(setID)
 		if !ok {
 			return nil, fmt.Errorf("set id %s not found in provider map", setID)
 		}
+	}
+	if !codeOK {
+		setCode = ""
 	}
 
 	endpoint := fmt.Sprintf("%s/api/cards?set_name=%s", baseURL, url.QueryEscape(setName))
@@ -123,10 +142,15 @@ func (p *Provider) FetchCardsForSet(ctx context.Context, setID string) ([]domain
 			rarity = "Secret"
 		}
 		cards = append(cards, domain.RemoteCard{
-			ID:          cardID,
-			SetID:       cardSetID,
-			SetName:     util.DecodeEscapedText(dto.SetName),
-			SetCode:     util.DecodeEscapedText(dto.SetCode),
+			ID:      cardID,
+			SetID:   cardSetID,
+			SetName: util.DecodeEscapedText(dto.SetName),
+			SetCode: util.DecodeEscapedText(firstNonBlank(
+				anyToString(dto.SetCode),
+				anyToString(dto.SetCodeCamel),
+				anyToString(dto.Code),
+				setCode,
+			)),
 			Language:    util.DecodeEscapedText(dto.Language),
 			Name:        util.DecodeEscapedText(dto.Name),
 			Number:      dto.Num,
@@ -237,6 +261,23 @@ func (p *Provider) getSetName(setID string) (string, bool) {
 	return name, ok
 }
 
+func (p *Provider) getSetCode(setID string) (string, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	code, ok := p.setCodeByID[setID]
+	return code, ok
+}
+
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 func anyToString(value any) string {
 	switch v := value.(type) {
 	case string:
@@ -264,27 +305,34 @@ type setsPayload struct {
 }
 
 type setDTO struct {
-	ID           int    `json:"id"`
-	Language     string `json:"language"`
-	Live         bool   `json:"live"`
-	Name         string `json:"name"`
-	Code         any    `json:"code"`
-	ReleaseDate  string `json:"release_date"`
-	Series       string `json:"series"`
-	SymbolImgURL string `json:"symbol_img_url"`
-	ImgURL       string `json:"img_url"`
+	ID             int    `json:"id"`
+	Language       string `json:"language"`
+	Live           bool   `json:"live"`
+	Name           string `json:"name"`
+	Code           any    `json:"code"`
+	SetCode        any    `json:"set_code"`
+	SetCodeCamel   any    `json:"setCode"`
+	Abbrev         string `json:"abbrev"`
+	PTCGOCode      string `json:"ptcgo_code"`
+	PTCGOCodeCamel string `json:"ptcgoCode"`
+	ReleaseDate    string `json:"release_date"`
+	Series         string `json:"series"`
+	SymbolImgURL   string `json:"symbol_img_url"`
+	ImgURL         string `json:"img_url"`
 }
 
 type cardDTO struct {
-	ID          int    `json:"id"`
-	ImgURL      string `json:"img_url"`
-	Language    string `json:"language"`
-	Name        string `json:"name"`
-	Num         string `json:"num"`
-	ReleaseDate string `json:"release_date"`
-	Secret      bool   `json:"secret"`
-	SetCode     string `json:"set_code"`
-	SetID       int    `json:"set_id"`
-	SetName     string `json:"set_name"`
-	TCGPlayerID any    `json:"tcgplayer_id"`
+	ID           int    `json:"id"`
+	ImgURL       string `json:"img_url"`
+	Language     string `json:"language"`
+	Name         string `json:"name"`
+	Num          string `json:"num"`
+	ReleaseDate  string `json:"release_date"`
+	Secret       bool   `json:"secret"`
+	SetCode      any    `json:"set_code"`
+	SetCodeCamel any    `json:"setCode"`
+	Code         any    `json:"code"`
+	SetID        int    `json:"set_id"`
+	SetName      string `json:"set_name"`
+	TCGPlayerID  any    `json:"tcgplayer_id"`
 }
