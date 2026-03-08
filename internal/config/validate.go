@@ -9,6 +9,8 @@ func (c Config) Validate() error {
 	switch {
 	case c.CardRefreshTTLHours < 1 || c.CardRefreshTTLHours > 168:
 		return errors.New("card refresh TTL must be between 1 and 168 hours")
+	case c.ImageDownloadWorkers < 1 || c.ImageDownloadWorkers > 32:
+		return errors.New("image download workers must be between 1 and 32")
 	case c.RequestDelayMs < 250 || c.RequestDelayMs > 10000:
 		return errors.New("request delay must be between 250 and 10000 ms")
 	case c.RateLimitCooldownSeconds < 1 || c.RateLimitCooldownSeconds > 300:

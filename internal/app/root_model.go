@@ -168,7 +168,7 @@ type rootModel struct {
 
 	cardStatus     string
 	cardRefreshing bool
-	cardImage      *termimg.ImageWidget
+	cardImageReady bool
 	cardImageErr   string
 	cardSelected   int
 
@@ -920,7 +920,7 @@ func (m *rootModel) addCardToCollection() tea.Cmd {
 }
 
 func (m *rootModel) loadCardImageWidget() {
-	m.cardImage = nil
+	m.cardImageReady = false
 	m.cardImageErr = ""
 
 	if !m.container.Config.ImagePreviewsEnabled {
@@ -940,13 +940,7 @@ func (m *rootModel) loadCardImageWidget() {
 		return
 	}
 
-	widget, err := termimg.NewImageWidgetFromFile(m.card.ImagePath)
-	if err != nil {
-		m.cardImageErr = "Failed to load image widget"
-		return
-	}
-	widget.SetProtocol(m.container.Renderer.Protocol())
-	m.cardImage = widget
+	m.cardImageReady = true
 }
 
 func (m *rootModel) openSettingsMenu() {
@@ -960,6 +954,7 @@ func (m *rootModel) openSettingsMenu() {
 			{Label: "Image previews: " + onOff(m.settingsDraft.ImagePreviewsEnabled), Value: "image_previews"},
 			{Label: "Test image compatibility", Value: "image_compat"},
 			{Label: "Image caching: " + onOff(m.settingsDraft.ImageCaching), Value: "image_caching"},
+			{Label: fmt.Sprintf("Image download workers: %d", m.settingsDraft.ImageDownloadWorkers), Value: "image_download_workers"},
 			{Label: "Backup image source: " + onOff(m.settingsDraft.BackupImageSource), Value: "backup_image_source"},
 			{Label: "Sync card details: " + onOff(m.settingsDraft.SyncCardDetails), Value: "sync_card_details"},
 			{Label: "Colors: " + onOff(m.settingsDraft.ColorsEnabled), Value: "colors"},
@@ -994,6 +989,9 @@ func (m *rootModel) onSettingsMenuSelect(value string) tea.Cmd {
 		return tea.Batch(m.spinner.Tick, m.imageCompatCmd())
 	case "image_caching":
 		m.openBoolSetting("image_caching", "Image Caching", "Store converted PNG card images in local cache.", m.settingsDraft.ImageCaching)
+		return nil
+	case "image_download_workers":
+		m.openIntSetting("image_download_workers", "Image Download Workers", "Parallel workers for set image downloads. Allowed range: 1 to 32.", m.settingsDraft.ImageDownloadWorkers, 1, 32)
 		return nil
 	case "backup_image_source":
 		m.openBoolSetting("backup_image_source", "Backup Image Source", "When enabled, PokeData and JSON image URLs are used if Scrydex fails.", m.settingsDraft.BackupImageSource)
@@ -1093,6 +1091,8 @@ func (m *rootModel) applyIntSetting(key string, value int) {
 		m.settingsDraft.RequestDelayMs = value
 	case "rate_limit_cooldown":
 		m.settingsDraft.RateLimitCooldownSeconds = value
+	case "image_download_workers":
+		m.settingsDraft.ImageDownloadWorkers = value
 	}
 }
 
@@ -1251,7 +1251,7 @@ func (m *rootModel) renderCardImagePane(width int, height int) string {
 	styles := m.styles()
 	content := ""
 	switch {
-	case m.cardImage != nil:
+	case m.cardImageReady:
 		content = ""
 	case m.cardImageErr != "":
 		content = styles.Muted.Render(m.cardImageErr)
@@ -1262,7 +1262,7 @@ func (m *rootModel) renderCardImagePane(width int, height int) string {
 }
 
 func (m *rootModel) renderCardImageOverlay(panelWidth int, panelHeight int) string {
-	if m.cardImage == nil || m.container.Renderer == nil {
+	if !m.cardImageReady || m.container.Renderer == nil {
 		return ""
 	}
 	imageWidth := panelWidth - 2
@@ -1270,9 +1270,9 @@ func (m *rootModel) renderCardImageOverlay(panelWidth int, panelHeight int) stri
 	if imageWidth < 4 || imageHeight < 4 {
 		return ""
 	}
-	m.cardImage.SetSizeWithCorrection(imageWidth, imageHeight)
-	rendered, err := m.cardImage.Render()
-	if err != nil {
+	renderWidth, renderHeight := fitImageCells(m.card.ImagePath, imageWidth, imageHeight)
+	rendered, err := m.container.Renderer.Render(m.card.ImagePath, renderWidth, renderHeight)
+	if err != nil || strings.TrimSpace(rendered) == "" || rendered == "[image unavailable]" {
 		return ""
 	}
 
@@ -1321,7 +1321,7 @@ func detailLayout(width int, height int) (left int, right int, panelHeight int) 
 	if contentWidth < 70 {
 		contentWidth = 70
 	}
-	left = contentWidth / 2
+	left = (contentWidth * 52) / 100
 	right = contentWidth - left - 1
 	if left < 30 {
 		left = 30
@@ -1339,6 +1339,53 @@ func detailLayout(width int, height int) (left int, right int, panelHeight int) 
 		panelHeight = 36
 	}
 	return left, right, panelHeight
+}
+
+func fitImageCells(imagePath string, maxWidth int, maxHeight int) (int, int) {
+	if maxWidth <= 0 || maxHeight <= 0 {
+		return maxWidth, maxHeight
+	}
+
+	file, err := os.Open(imagePath)
+	if err != nil {
+		return maxWidth, maxHeight
+	}
+	defer file.Close()
+
+	cfg, _, err := image.DecodeConfig(file)
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
+		return maxWidth, maxHeight
+	}
+
+	features := termimg.QueryTerminalFeatures()
+	cellWidth := float64(termimg.DefaultFontWidth)
+	cellHeight := float64(termimg.DefaultFontHeight)
+	if features != nil {
+		if features.FontWidth > 0 {
+			cellWidth = float64(features.FontWidth)
+		}
+		if features.FontHeight > 0 {
+			cellHeight = float64(features.FontHeight)
+		}
+	}
+
+	imageAspect := float64(cfg.Width) / float64(cfg.Height)
+	widgetAspect := (float64(maxWidth) * cellWidth) / (float64(maxHeight) * cellHeight)
+
+	renderWidth := maxWidth
+	renderHeight := maxHeight
+	if imageAspect > widgetAspect {
+		renderHeight = int((float64(maxWidth) * cellWidth) / imageAspect / cellHeight)
+	} else {
+		renderWidth = int((float64(maxHeight) * cellHeight) * imageAspect / cellWidth)
+	}
+	if renderWidth < 1 {
+		renderWidth = 1
+	}
+	if renderHeight < 1 {
+		renderHeight = 1
+	}
+	return renderWidth, renderHeight
 }
 
 func renderBar(percent float64, width int) string {

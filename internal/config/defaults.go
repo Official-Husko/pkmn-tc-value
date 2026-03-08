@@ -7,6 +7,7 @@ func Default() Config {
 		CardRefreshTTLHours:      48,
 		ImagePreviewsEnabled:     true,
 		ImageCaching:             true,
+		ImageDownloadWorkers:     6,
 		BackupImageSource:        false,
 		SyncCardDetails:          false,
 		ColorsEnabled:            true,

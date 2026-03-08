@@ -6,6 +6,7 @@ type Config struct {
 	CardRefreshTTLHours      int    `json:"cardRefreshTTLHours"`
 	ImagePreviewsEnabled     bool   `json:"imagePreviewsEnabled"`
 	ImageCaching             bool   `json:"imageCaching"`
+	ImageDownloadWorkers     int    `json:"imageDownloadWorkers"`
 	BackupImageSource        bool   `json:"backup_image_source"`
 	SyncCardDetails          bool   `json:"syncCardDetails"`
 	ColorsEnabled            bool   `json:"colorsEnabled"`

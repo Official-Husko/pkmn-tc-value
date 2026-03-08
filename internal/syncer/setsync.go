@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	bridgepokedata "github.com/Official-Husko/pkmn-tc-value/internal/bridge/pokedata"
 	"github.com/Official-Husko/pkmn-tc-value/internal/catalog"
@@ -195,21 +196,66 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 		total := len(orderedIDs)
 		done := 0
 		progress(SetSyncProgress{Stage: "images", Status: "Downloading card images", Done: done, Total: total})
-		for _, cardID := range orderedIDs {
-			done++
-			card := nextCards[cardID]
-			path, err := s.images.Ensure(ctx, card)
-			if err == nil && path != "" && card.ImagePath != path {
-				card.ImagePath = path
-				nextCards[cardID] = card
-				result.ImagesSaved++
+		workers := configuredImageWorkers(opts.Config.ImageDownloadWorkers, total)
+		if workers > 0 {
+			type imageJob struct {
+				cardID string
+				card   domain.Card
 			}
-			progress(SetSyncProgress{
-				Stage:  "images",
-				Status: fmt.Sprintf("Downloading card images (%d/%d)", done, total),
-				Done:   done,
-				Total:  total,
-			})
+			type imageResult struct {
+				cardID string
+				path   string
+				err    error
+			}
+
+			jobs := make(chan imageJob, total)
+			for _, cardID := range orderedIDs {
+				jobs <- imageJob{cardID: cardID, card: nextCards[cardID]}
+			}
+			close(jobs)
+
+			results := make(chan imageResult, total)
+			var wg sync.WaitGroup
+			for i := 0; i < workers; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for job := range jobs {
+						path, err := s.images.Ensure(ctx, job.card)
+						select {
+						case results <- imageResult{cardID: job.cardID, path: path, err: err}:
+						case <-ctx.Done():
+							return
+						}
+						if ctx.Err() != nil {
+							return
+						}
+					}
+				}()
+			}
+
+			go func() {
+				wg.Wait()
+				close(results)
+			}()
+
+			for res := range results {
+				done++
+				if res.err == nil && res.path != "" {
+					card := nextCards[res.cardID]
+					if card.ImagePath != res.path {
+						card.ImagePath = res.path
+						nextCards[res.cardID] = card
+						result.ImagesSaved++
+					}
+				}
+				progress(SetSyncProgress{
+					Stage:  "images",
+					Status: fmt.Sprintf("Downloading card images (%d/%d, %d workers)", done, total, workers),
+					Done:   done,
+					Total:  total,
+				})
+			}
 		}
 	}
 
@@ -264,4 +310,17 @@ func withDefaultProgress(progress func(SetSyncProgress)) func(SetSyncProgress) {
 		return func(SetSyncProgress) {}
 	}
 	return progress
+}
+
+func configuredImageWorkers(configured int, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	if configured < 1 {
+		configured = 1
+	}
+	if configured > total {
+		configured = total
+	}
+	return configured
 }

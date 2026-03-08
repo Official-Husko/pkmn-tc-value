@@ -61,22 +61,29 @@ func (r TermimgRenderer) Render(path string, maxWidth int, maxHeight int) (strin
 	}
 
 	if maxWidth <= 0 {
-		maxWidth = 32
+		maxWidth = 42
 	}
 	if maxHeight <= 0 {
-		maxHeight = 20
+		maxHeight = 28
 	}
 
-	rendered, err := img.
+	renderBuilder := img.
 		Protocol(r.protocol).
 		Width(maxWidth).
 		Height(maxHeight).
 		Scale(termimg.ScaleFit).
-		Dither(true).
-		DitherMode(termimg.DitherFloydSteinberg).
-		Compression(true).
-		PNG(true).
-		Render()
+		Compression(false).
+		PNG(true)
+
+	if r.protocol == termimg.Sixel {
+		renderBuilder = renderBuilder.
+			Dither(true).
+			DitherMode(termimg.DitherFloydSteinberg)
+	} else {
+		renderBuilder = renderBuilder.Dither(false)
+	}
+
+	rendered, err := renderBuilder.Render()
 	if err != nil {
 		return "[image unavailable]", fmt.Errorf("render image for terminal: %w", err)
 	}

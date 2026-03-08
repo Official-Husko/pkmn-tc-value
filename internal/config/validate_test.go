@@ -20,6 +20,12 @@ func TestValidate(t *testing.T) {
 	}
 
 	cfg = Default()
+	cfg.ImageDownloadWorkers = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected image download worker validation error")
+	}
+
+	cfg = Default()
 	cfg.UserAgent = "   "
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected user agent validation error")
