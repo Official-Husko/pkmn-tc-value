@@ -85,11 +85,15 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 		return SetSyncResult{}, err
 	}
 	matchedPriceSetName := strings.TrimSpace(set.PriceProviderSetName)
+	matchedPriceSetCode := strings.TrimSpace(set.PriceProviderSetCode)
 	cardPriceIDByRemoteID := make(map[string]string, len(remoteCards))
 	if s.priceBridge != nil {
-		if resolvedSetName, matches, mapErr := s.priceBridge.MapSetCards(ctx, set, remoteCards); mapErr == nil {
-			if strings.TrimSpace(resolvedSetName) != "" {
-				matchedPriceSetName = strings.TrimSpace(resolvedSetName)
+		if resolvedSet, matches, mapErr := s.priceBridge.MapSetCards(ctx, set, remoteCards); mapErr == nil {
+			if strings.TrimSpace(resolvedSet.Name) != "" {
+				matchedPriceSetName = strings.TrimSpace(resolvedSet.Name)
+			}
+			if strings.TrimSpace(resolvedSet.Code) != "" {
+				matchedPriceSetCode = strings.TrimSpace(resolvedSet.Code)
 			}
 			for remoteID, priceID := range matches {
 				cardPriceIDByRemoteID[remoteID] = strings.TrimSpace(priceID)
@@ -245,6 +249,9 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 		}
 		if matchedPriceSetName != "" {
 			setRecord.PriceProviderSetName = matchedPriceSetName
+		}
+		if matchedPriceSetCode != "" {
+			setRecord.PriceProviderSetCode = matchedPriceSetCode
 		}
 		db.Sets[setID] = setRecord
 		return nil

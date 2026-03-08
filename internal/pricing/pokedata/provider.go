@@ -29,7 +29,7 @@ type Provider struct {
 }
 
 type cardIDResolver interface {
-	ResolveCardID(ctx context.Context, set domain.Set, card domain.Card) (string, string, error)
+	ResolveCardID(ctx context.Context, set domain.Set, card domain.Card) (string, string, string, error)
 }
 
 func New(client *http.Client, resolver cardIDResolver) pricing.Provider {
@@ -43,16 +43,26 @@ func (p *Provider) Name() string {
 func (p *Provider) RefreshCard(ctx context.Context, card domain.Card, set domain.Set, cfg config.Config) (domain.PriceSnapshot, error) {
 	priceProviderCardID := strings.TrimSpace(card.PriceProviderCardID)
 	resolvedSetName := ""
+	resolvedSetCode := ""
 	if priceProviderCardID == "" && p.resolver != nil {
-		resolvedID, resolvedSet, resolveErr := p.resolver.ResolveCardID(ctx, set, card)
+		resolvedID, resolvedSetNameValue, resolvedSetCodeValue, resolveErr := p.resolver.ResolveCardID(ctx, set, card)
 		if resolveErr != nil {
 			return domain.PriceSnapshot{}, resolveErr
 		}
 		priceProviderCardID = strings.TrimSpace(resolvedID)
-		resolvedSetName = strings.TrimSpace(resolvedSet)
+		resolvedSetName = strings.TrimSpace(resolvedSetNameValue)
+		resolvedSetCode = strings.TrimSpace(resolvedSetCodeValue)
 	}
 	if priceProviderCardID == "" {
-		return domain.PriceSnapshot{}, fmt.Errorf("missing price provider card id for %s", card.ID)
+		return domain.PriceSnapshot{}, fmt.Errorf(
+			"missing price provider card id for card=%s number=%s set=%s setCode=%s priceSet=%s priceSetCode=%s",
+			card.ID,
+			card.Number,
+			set.Name,
+			set.SetCode,
+			set.PriceProviderSetName,
+			set.PriceProviderSetCode,
+		)
 	}
 
 	cardID, err := strconv.Atoi(priceProviderCardID)
@@ -97,6 +107,7 @@ func (p *Provider) RefreshCard(ctx context.Context, card domain.Card, set domain
 		CheckedAt:            checkedAt,
 		PriceProviderCardID:  priceProviderCardID,
 		PriceProviderSetName: resolvedSetName,
+		PriceProviderSetCode: resolvedSetCode,
 	}, nil
 }
 

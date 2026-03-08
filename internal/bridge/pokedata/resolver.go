@@ -38,6 +38,8 @@ type setDTO struct {
 	Live     bool   `json:"live"`
 	Language string `json:"language"`
 	Name     string `json:"name"`
+	Code     any    `json:"code"`
+	SetCode  any    `json:"set_code"`
 }
 
 type cardDTO struct {
@@ -67,6 +69,11 @@ type PokeCard struct {
 	Language string
 }
 
+type ResolvedSet struct {
+	Name string
+	Code string
+}
+
 func NewResolver(client *http.Client, cooldown time.Duration) *Resolver {
 	if cooldown <= 0 {
 		cooldown = 30 * time.Second
@@ -77,56 +84,124 @@ func NewResolver(client *http.Client, cooldown time.Duration) *Resolver {
 	}
 }
 
-func (r *Resolver) MapSetCards(ctx context.Context, set domain.Set, cards []domain.RemoteCard) (string, map[string]string, error) {
-	priceSetName, err := r.resolveSetName(ctx, set)
+func (r *Resolver) MapSetCards(ctx context.Context, set domain.Set, cards []domain.RemoteCard) (ResolvedSet, map[string]string, error) {
+	resolvedSet, err := r.resolveSet(ctx, set)
 	if err != nil {
-		return "", nil, err
+		return ResolvedSet{}, nil, err
 	}
-	if strings.TrimSpace(priceSetName) == "" {
-		return "", map[string]string{}, nil
+	if strings.TrimSpace(resolvedSet.Name) == "" {
+		return ResolvedSet{}, map[string]string{}, nil
 	}
 
-	priceCards, usedSetName, err := r.fetchCardsWithFallback(ctx, priceSetName, set.Name)
+	priceCards, usedSetName, err := r.fetchCardsWithFallback(ctx, resolvedSet.Name, set.Name)
 	if err != nil {
-		return "", nil, err
+		return ResolvedSet{}, nil, err
+	}
+	usedCode := strings.TrimSpace(resolvedSet.Code)
+	if !strings.EqualFold(strings.TrimSpace(usedSetName), strings.TrimSpace(resolvedSet.Name)) {
+		usedCode = strings.TrimSpace(r.findSetCodeByName(set.Language, usedSetName))
 	}
 	matches := MatchRemoteCards(cards, priceCards)
-	return usedSetName, matches, nil
+	return ResolvedSet{Name: usedSetName, Code: usedCode}, matches, nil
 }
 
-func (r *Resolver) ResolveCardID(ctx context.Context, set domain.Set, card domain.Card) (string, string, error) {
-	priceSetName, err := r.resolveSetName(ctx, set)
+func (r *Resolver) ResolveCardID(ctx context.Context, set domain.Set, card domain.Card) (string, string, string, error) {
+	resolvedSet, err := r.resolveSet(ctx, set)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	if strings.TrimSpace(priceSetName) == "" {
-		return "", "", nil
+	if strings.TrimSpace(resolvedSet.Name) == "" {
+		return "", "", "", nil
 	}
 
-	priceCards, usedSetName, err := r.fetchCardsWithFallback(ctx, priceSetName, set.Name)
+	priceCards, usedSetName, err := r.fetchCardsWithFallback(ctx, resolvedSet.Name, set.Name)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
+	}
+	usedCode := strings.TrimSpace(resolvedSet.Code)
+	if !strings.EqualFold(strings.TrimSpace(usedSetName), strings.TrimSpace(resolvedSet.Name)) {
+		usedCode = strings.TrimSpace(r.findSetCodeByName(set.Language, usedSetName))
 	}
 
 	match := MatchLocalCard(card, priceCards)
-	return match, usedSetName, nil
+	return match, usedSetName, usedCode, nil
 }
 
-func (r *Resolver) resolveSetName(ctx context.Context, set domain.Set) (string, error) {
-	if strings.TrimSpace(set.PriceProviderSetName) != "" {
-		return set.PriceProviderSetName, nil
-	}
+func (r *Resolver) resolveSet(ctx context.Context, set domain.Set) (ResolvedSet, error) {
 	sets, err := r.fetchSets(ctx)
 	if err != nil {
-		return "", err
+		return ResolvedSet{}, err
 	}
 
+	cachedName := strings.TrimSpace(set.PriceProviderSetName)
+	cachedCode := strings.TrimSpace(set.PriceProviderSetCode)
+	if cachedName != "" || cachedCode != "" {
+		if cachedName != "" && cachedCode != "" {
+			return ResolvedSet{Name: cachedName, Code: cachedCode}, nil
+		}
+		codeTarget := normalizeCode(cachedCode)
+		for _, item := range sets {
+			if !item.Live {
+				continue
+			}
+			name := util.DecodeEscapedText(item.Name)
+			code := setCodeOf(item)
+			if cachedName != "" && strings.EqualFold(name, cachedName) {
+				if strings.TrimSpace(cachedCode) == "" {
+					return ResolvedSet{Name: name, Code: code}, nil
+				}
+				return ResolvedSet{Name: name, Code: cachedCode}, nil
+			}
+			if codeTarget != "" && normalizeCode(code) == codeTarget {
+				if strings.TrimSpace(cachedName) == "" {
+					return ResolvedSet{Name: name, Code: code}, nil
+				}
+				return ResolvedSet{Name: cachedName, Code: code}, nil
+			}
+		}
+		return ResolvedSet{Name: cachedName, Code: cachedCode}, nil
+	}
+
+	codeCandidates := []string{
+		normalizeCode(set.SetCode),
+		normalizeCode(set.ID),
+	}
 	wantLang := normalizeLanguage(set.Language)
+	for _, target := range codeCandidates {
+		if target == "" {
+			continue
+		}
+		// Prefer language match first.
+		for _, item := range sets {
+			if !item.Live {
+				continue
+			}
+			if wantLang != "" && normalizeLanguage(item.Language) != wantLang {
+				continue
+			}
+			code := setCodeOf(item)
+			if normalizeCode(code) == target {
+				return ResolvedSet{Name: util.DecodeEscapedText(item.Name), Code: code}, nil
+			}
+		}
+		// Then allow cross-language if no same-language hit.
+		for _, item := range sets {
+			if !item.Live {
+				continue
+			}
+			code := setCodeOf(item)
+			if normalizeCode(code) == target {
+				return ResolvedSet{Name: util.DecodeEscapedText(item.Name), Code: code}, nil
+			}
+		}
+	}
+
 	wantName := strings.TrimSpace(set.Name)
 	wantNorm := util.NormalizeName(wantName)
 
 	type candidate struct {
 		name  string
+		code  string
 		score int
 	}
 	candidates := make([]candidate, 0, 8)
@@ -139,8 +214,9 @@ func (r *Resolver) resolveSetName(ctx context.Context, set domain.Set) (string, 
 		}
 
 		name := util.DecodeEscapedText(item.Name)
+		code := setCodeOf(item)
 		if strings.EqualFold(name, wantName) {
-			return name, nil
+			return ResolvedSet{Name: name, Code: code}, nil
 		}
 
 		norm := util.NormalizeName(name)
@@ -153,11 +229,11 @@ func (r *Resolver) resolveSetName(ctx context.Context, set domain.Set) (string, 
 		default:
 			continue
 		}
-		candidates = append(candidates, candidate{name: name, score: score})
+		candidates = append(candidates, candidate{name: name, code: code, score: score})
 	}
 
 	if len(candidates) == 0 {
-		return "", nil
+		return ResolvedSet{}, nil
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].score == candidates[j].score {
@@ -165,7 +241,7 @@ func (r *Resolver) resolveSetName(ctx context.Context, set domain.Set) (string, 
 		}
 		return candidates[i].score > candidates[j].score
 	})
-	return candidates[0].name, nil
+	return ResolvedSet{Name: candidates[0].name, Code: candidates[0].code}, nil
 }
 
 func (r *Resolver) fetchCardsWithFallback(ctx context.Context, preferredName string, fallbackName string) ([]PokeCard, string, error) {
@@ -216,6 +292,30 @@ func (r *Resolver) fetchSets(ctx context.Context) ([]setDTO, error) {
 	out := make([]setDTO, len(sets))
 	copy(out, sets)
 	return out, nil
+}
+
+func (r *Resolver) findSetCodeByName(language string, setName string) string {
+	targetName := strings.TrimSpace(setName)
+	if targetName == "" {
+		return ""
+	}
+	targetLang := normalizeLanguage(language)
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, item := range r.sets {
+		if !item.Live {
+			continue
+		}
+		if targetLang != "" && normalizeLanguage(item.Language) != targetLang {
+			continue
+		}
+		name := util.DecodeEscapedText(item.Name)
+		if strings.EqualFold(strings.TrimSpace(name), targetName) {
+			return setCodeOf(item)
+		}
+	}
+	return ""
 }
 
 func (r *Resolver) fetchCardsBySetName(ctx context.Context, setName string) ([]PokeCard, error) {
@@ -335,5 +435,43 @@ func normalizeLanguage(value string) string {
 		return "ja"
 	default:
 		return normalized
+	}
+}
+
+func setCodeOf(set setDTO) string {
+	return util.DecodeEscapedText(firstNonBlank(
+		anyToString(set.SetCode),
+		anyToString(set.Code),
+	))
+}
+
+func normalizeCode(value string) string {
+	code := strings.ToLower(strings.TrimSpace(value))
+	code = strings.ReplaceAll(code, " ", "")
+	return code
+}
+
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func anyToString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case float64:
+		return strconv.FormatInt(int64(v), 10)
+	case int:
+		return strconv.Itoa(v)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	default:
+		return ""
 	}
 }

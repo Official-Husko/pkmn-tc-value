@@ -56,6 +56,9 @@ func (s *CardRefreshService) Refresh(ctx context.Context, card domain.Card, set 
 		if strings.TrimSpace(snapshot.PriceProviderSetName) != "" {
 			set.PriceProviderSetName = snapshot.PriceProviderSetName
 		}
+		if strings.TrimSpace(snapshot.PriceProviderSetCode) != "" {
+			set.PriceProviderSetCode = snapshot.PriceProviderSetCode
+		}
 	}
 	if strings.TrimSpace(card.SetCode) == "" {
 		card.SetCode = set.SetCode
@@ -94,6 +97,9 @@ func (s *CardRefreshService) Refresh(ctx context.Context, card domain.Card, set 
 			}
 			if strings.TrimSpace(currentSet.PriceProviderSetName) == "" && strings.TrimSpace(set.PriceProviderSetName) != "" {
 				currentSet.PriceProviderSetName = set.PriceProviderSetName
+			}
+			if strings.TrimSpace(currentSet.PriceProviderSetCode) == "" && strings.TrimSpace(set.PriceProviderSetCode) != "" {
+				currentSet.PriceProviderSetCode = set.PriceProviderSetCode
 			}
 			db.Sets[persisted.SetID] = currentSet
 		}

@@ -15,11 +15,12 @@ import (
 type fakeResolver struct {
 	id      string
 	setName string
+	setCode string
 	err     error
 }
 
-func (f fakeResolver) ResolveCardID(_ context.Context, _ domain.Set, _ domain.Card) (string, string, error) {
-	return f.id, f.setName, f.err
+func (f fakeResolver) ResolveCardID(_ context.Context, _ domain.Set, _ domain.Card) (string, string, string, error) {
+	return f.id, f.setName, f.setCode, f.err
 }
 
 func TestRefreshCardUsesPriceProviderCardID(t *testing.T) {
@@ -66,7 +67,7 @@ func TestRefreshCardResolvesMissingProviderID(t *testing.T) {
 
 	p := &Provider{
 		client:   client,
-		resolver: fakeResolver{id: "999", setName: "Some Set"},
+		resolver: fakeResolver{id: "999", setName: "Some Set", setCode: "m2"},
 		endpoint: "https://example.invalid/stats",
 	}
 
@@ -83,6 +84,9 @@ func TestRefreshCardResolvesMissingProviderID(t *testing.T) {
 	}
 	if snapshot.PriceProviderSetName != "Some Set" {
 		t.Fatalf("expected snapshot set name Some Set, got %q", snapshot.PriceProviderSetName)
+	}
+	if snapshot.PriceProviderSetCode != "m2" {
+		t.Fatalf("expected snapshot set code m2, got %q", snapshot.PriceProviderSetCode)
 	}
 }
 

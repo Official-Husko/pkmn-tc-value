@@ -59,6 +59,10 @@ func (s *StartupService) Run(ctx context.Context, progress func(StartupProgress)
 			if priceProviderSetName == "" && ok {
 				priceProviderSetName = strings.TrimSpace(existing.PriceProviderSetName)
 			}
+			priceProviderSetCode := strings.TrimSpace(remote.PriceProviderSetCode)
+			if priceProviderSetCode == "" && ok {
+				priceProviderSetCode = strings.TrimSpace(existing.PriceProviderSetCode)
+			}
 			if !ok {
 				stats.NewSets++
 			} else if existing.Name != remote.Name || existing.Total != total || existing.ReleaseDate != remote.ReleaseDate {
@@ -70,6 +74,7 @@ func (s *StartupService) Run(ctx context.Context, progress func(StartupProgress)
 				Name:                 remote.Name,
 				SetCode:              setCode,
 				PriceProviderSetName: priceProviderSetName,
+				PriceProviderSetCode: priceProviderSetCode,
 				Series:               remote.Series,
 				PrintedTotal:         printedTotal,
 				Total:                total,

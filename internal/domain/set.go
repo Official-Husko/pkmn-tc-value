@@ -8,6 +8,7 @@ type Set struct {
 	Name                 string     `json:"name"`
 	SetCode              string     `json:"setCode,omitempty"`
 	PriceProviderSetName string     `json:"priceProviderSetName,omitempty"`
+	PriceProviderSetCode string     `json:"priceProviderSetCode,omitempty"`
 	Series               string     `json:"series"`
 	PrintedTotal         int        `json:"printedTotal"`
 	Total                int        `json:"total"`
@@ -23,6 +24,7 @@ type RemoteSet struct {
 	Name                 string
 	SetCode              string
 	PriceProviderSetName string
+	PriceProviderSetCode string
 	Series               string
 	PrintedTotal         int
 	Total                int

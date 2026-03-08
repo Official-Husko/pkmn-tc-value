@@ -268,7 +268,15 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cardRefreshDoneMsg:
 		m.cardRefreshing = false
 		if msg.err != nil {
-			m.cardStatus = "Refresh failed, showing cached data"
+			reason := strings.TrimSpace(msg.err.Error())
+			if reason == "" {
+				m.cardStatus = "Refresh failed, showing cached data"
+			} else {
+				if len(reason) > 120 {
+					reason = reason[:117] + "..."
+				}
+				m.cardStatus = "Refresh failed: " + reason
+			}
 			break
 		}
 		m.card = msg.card
@@ -612,7 +620,9 @@ func (m *rootModel) onMenuSelect(value string) tea.Cmd {
 			m.fatalErr = err
 			return tea.Quit
 		}
-		needsMetadataBackfill := strings.TrimSpace(set.SetCode) == ""
+		needsMetadataBackfill := strings.TrimSpace(set.SetCode) == "" ||
+			strings.TrimSpace(set.PriceProviderSetName) == "" ||
+			strings.TrimSpace(set.PriceProviderSetCode) == ""
 		if cached && !needsMetadataBackfill {
 			m.openCardLookupInput()
 			return nil

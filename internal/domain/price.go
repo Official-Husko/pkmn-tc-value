@@ -15,4 +15,5 @@ type PriceSnapshot struct {
 	MatchedName          string    `json:"matchedName,omitempty"`
 	PriceProviderCardID  string    `json:"priceProviderCardId,omitempty"`
 	PriceProviderSetName string    `json:"priceProviderSetName,omitempty"`
+	PriceProviderSetCode string    `json:"priceProviderSetCode,omitempty"`
 }
