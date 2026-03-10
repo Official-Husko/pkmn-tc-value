@@ -2,7 +2,6 @@ package pokedata
 
 import (
 	"sort"
-	"strings"
 
 	"github.com/Official-Husko/pkmn-tc-value/internal/domain"
 	"github.com/Official-Husko/pkmn-tc-value/internal/util"
@@ -21,25 +20,20 @@ func MatchRemoteCards(cards []domain.RemoteCard, priceCards []PokeCard) map[stri
 		return sorted[i].ID < sorted[j].ID
 	})
 
-	used := make(map[string]struct{})
 	matches := make(map[string]string, len(sorted))
 
 	for _, card := range sorted {
 		numberKey := util.NormalizeCardNumber(card.Number)
 		nameKey := util.NormalizeName(card.Name)
 
-		numberMatches := filterUnused(index[numberKey], used)
+		numberMatches := index[numberKey]
 		nameMatches := filterByName(numberMatches, nameKey)
 
 		switch {
-		case len(nameMatches) == 1:
-			matches[card.ID] = nameMatches[0].ID
-			used[nameMatches[0].ID] = struct{}{}
-		case len(nameMatches) > 1:
-			continue
-		case len(numberMatches) == 1:
-			matches[card.ID] = numberMatches[0].ID
-			used[numberMatches[0].ID] = struct{}{}
+		case len(nameMatches) >= 1:
+			matches[card.ID] = selectDeterministic(nameMatches)
+		case len(numberMatches) >= 1:
+			matches[card.ID] = selectDeterministic(numberMatches)
 		}
 	}
 
@@ -62,9 +56,11 @@ func MatchLocalCard(card domain.Card, priceCards []PokeCard) string {
 	case len(nameMatches) == 1:
 		return nameMatches[0].ID
 	case len(nameMatches) > 1:
-		return ""
+		return selectDeterministic(nameMatches)
 	case len(numberMatches) == 1:
 		return numberMatches[0].ID
+	case len(numberMatches) > 1:
+		return selectDeterministic(numberMatches)
 	}
 
 	globalNameMatches := make([]PokeCard, 0, 2)
@@ -76,21 +72,10 @@ func MatchLocalCard(card domain.Card, priceCards []PokeCard) string {
 	if len(globalNameMatches) == 1 {
 		return globalNameMatches[0].ID
 	}
+	if len(globalNameMatches) > 1 {
+		return selectDeterministic(globalNameMatches)
+	}
 	return ""
-}
-
-func filterUnused(items []PokeCard, used map[string]struct{}) []PokeCard {
-	if len(items) == 0 {
-		return nil
-	}
-	out := make([]PokeCard, 0, len(items))
-	for _, item := range items {
-		if _, ok := used[strings.TrimSpace(item.ID)]; ok {
-			continue
-		}
-		out = append(out, item)
-	}
-	return out
 }
 
 func filterByName(items []PokeCard, wantName string) []PokeCard {
@@ -104,4 +89,19 @@ func filterByName(items []PokeCard, wantName string) []PokeCard {
 		}
 	}
 	return out
+}
+
+func selectDeterministic(items []PokeCard) string {
+	if len(items) == 0 {
+		return ""
+	}
+	sorted := make([]PokeCard, len(items))
+	copy(sorted, items)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].ID == sorted[j].ID {
+			return util.NormalizeName(sorted[i].Name) < util.NormalizeName(sorted[j].Name)
+		}
+		return sorted[i].ID < sorted[j].ID
+	})
+	return sorted[0].ID
 }

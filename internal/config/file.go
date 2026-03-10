@@ -10,13 +10,16 @@ import (
 )
 
 type Paths struct {
-	ConfigDir  string
-	CacheDir   string
-	ConfigFile string
-	DBFile     string
-	LockFile   string
-	ImageDir   string
-	DebugLog   string
+	ConfigDir        string
+	CacheDir         string
+	ConfigFile       string
+	DBFile           string
+	SetsDBFile       string
+	CardsDBFile      string
+	CollectionDBFile string
+	LockFile         string
+	ImageDir         string
+	DebugLog         string
 }
 
 func ResolvePaths() (Paths, error) {
@@ -24,15 +27,57 @@ func ResolvePaths() (Paths, error) {
 	if err != nil {
 		return Paths{}, fmt.Errorf("resolve working directory: %w", err)
 	}
+	dataDir := filepath.Join(root, "data")
 	return Paths{
-		ConfigDir:  root,
-		CacheDir:   root,
-		ConfigFile: filepath.Join(root, "config.json"),
-		DBFile:     filepath.Join(root, "db.json"),
-		LockFile:   filepath.Join(root, "db.lock"),
-		ImageDir:   filepath.Join(root, "cards"),
-		DebugLog:   filepath.Join(root, "debug.log"),
+		ConfigDir:        dataDir,
+		CacheDir:         dataDir,
+		ConfigFile:       filepath.Join(dataDir, "config.json"),
+		DBFile:           filepath.Join(dataDir, "database.db"),
+		SetsDBFile:       filepath.Join(dataDir, "sets.db"),
+		CardsDBFile:      filepath.Join(dataDir, "cards.db"),
+		CollectionDBFile: filepath.Join(dataDir, "collection.db"),
+		LockFile:         filepath.Join(dataDir, "db.lock"),
+		ImageDir:         filepath.Join(dataDir, "cards"),
+		DebugLog:         filepath.Join(dataDir, "debug.log"),
 	}, nil
+}
+
+func MigrateLegacyLayout(paths Paths) error {
+	root := filepath.Dir(paths.ConfigDir)
+	legacyToNew := [][2]string{
+		{filepath.Join(root, "config.json"), paths.ConfigFile},
+		{filepath.Join(paths.ConfigDir, "db.db"), paths.DBFile},
+		{filepath.Join(root, "db.db"), paths.DBFile},
+		{filepath.Join(root, "database.db"), paths.DBFile},
+		{filepath.Join(root, "db.json"), paths.DBFile},
+		{filepath.Join(root, "sets.db"), paths.SetsDBFile},
+		{filepath.Join(root, "cards.db"), paths.CardsDBFile},
+		{filepath.Join(root, "collection.db"), paths.CollectionDBFile},
+		{filepath.Join(root, "cards"), paths.ImageDir},
+		{filepath.Join(root, "debug.log"), paths.DebugLog},
+	}
+	for _, pair := range legacyToNew {
+		src := pair[0]
+		dst := pair[1]
+		if _, err := os.Stat(src); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("stat legacy path %q: %w", src, err)
+		}
+		if _, err := os.Stat(dst); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat destination path %q: %w", dst, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return fmt.Errorf("create destination directory for %q: %w", dst, err)
+		}
+		if err := os.Rename(src, dst); err != nil {
+			return fmt.Errorf("migrate %q to %q: %w", src, dst, err)
+		}
+	}
+	return nil
 }
 
 func LoadOrCreate(path string) (Config, error) {

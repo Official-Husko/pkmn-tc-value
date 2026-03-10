@@ -30,7 +30,7 @@ func TestMatchRemoteCards(t *testing.T) {
 	}
 }
 
-func TestMatchRemoteCardsAmbiguous(t *testing.T) {
+func TestMatchRemoteCardsAmbiguousFallsBackDeterministic(t *testing.T) {
 	remote := []domain.RemoteCard{
 		{ID: "sv4a-095", Number: "095", Name: "Pikachu"},
 	}
@@ -40,8 +40,8 @@ func TestMatchRemoteCardsAmbiguous(t *testing.T) {
 	}
 
 	got := MatchRemoteCards(remote, priceCards)
-	if _, ok := got["sv4a-095"]; ok {
-		t.Fatalf("expected no match for ambiguous card, got %v", got["sv4a-095"])
+	if got["sv4a-095"] != "1001" {
+		t.Fatalf("expected deterministic fallback match 1001, got %q", got["sv4a-095"])
 	}
 }
 
@@ -52,5 +52,16 @@ func TestMatchLocalCard(t *testing.T) {
 	}
 	if got := MatchLocalCard(card, priceCards); got != "222" {
 		t.Fatalf("expected 222, got %q", got)
+	}
+}
+
+func TestMatchLocalCardAmbiguousFallsBackDeterministic(t *testing.T) {
+	card := domain.Card{Number: "095", Name: "Pikachu"}
+	priceCards := []PokeCard{
+		{ID: "1002", Number: "095", Name: "Alt Pikachu"},
+		{ID: "1001", Number: "095", Name: "Another Pikachu"},
+	}
+	if got := MatchLocalCard(card, priceCards); got != "1001" {
+		t.Fatalf("expected deterministic fallback 1001, got %q", got)
 	}
 }

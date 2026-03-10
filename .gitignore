@@ -1,4 +1,5 @@
 cards/*
+data/
 cmd/pkmn-tc-value/main.go
 .gitignore
 db.lock

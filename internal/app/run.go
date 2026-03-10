@@ -14,6 +14,9 @@ func Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := config.MigrateLegacyLayout(paths); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(paths.ConfigDir, 0o755); err != nil {
 		return err
 	}
@@ -30,7 +33,7 @@ func Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	db, err := store.Load(paths.DBFile)
+	db, err := store.Load(paths.DBFile, paths.SetsDBFile, paths.CardsDBFile, paths.CollectionDBFile)
 	if err != nil {
 		return err
 	}
