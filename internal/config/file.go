@@ -20,6 +20,7 @@ type Paths struct {
 	LockFile         string
 	ImageDir         string
 	DebugLog         string
+	LogsDir          string
 }
 
 func ResolvePaths() (Paths, error) {
@@ -39,6 +40,7 @@ func ResolvePaths() (Paths, error) {
 		LockFile:         filepath.Join(dataDir, "db.lock"),
 		ImageDir:         filepath.Join(dataDir, "cards"),
 		DebugLog:         filepath.Join(dataDir, "debug.log"),
+		LogsDir:          filepath.Join(dataDir, "logs"),
 	}, nil
 }
 
@@ -55,6 +57,7 @@ func MigrateLegacyLayout(paths Paths) error {
 		{filepath.Join(root, "collection.db"), paths.CollectionDBFile},
 		{filepath.Join(root, "cards"), paths.ImageDir},
 		{filepath.Join(root, "debug.log"), paths.DebugLog},
+		{filepath.Join(root, "logs"), paths.LogsDir},
 	}
 	for _, pair := range legacyToNew {
 		src := pair[0]

@@ -84,6 +84,24 @@ func EditSettings(cfg config.Config, renderer images.Renderer, colors bool) (con
 				continue
 			}
 			next.ImageCaching = value
+		case "startup_prefetch_metadata":
+			value, canceled, err := editBoolSetting(colors, "Prefetch Card Metadata on Startup", "When enabled, startup sync loads full card metadata for all sets (without downloading images).", next.PrefetchCardMetadataOnStartup)
+			if err != nil {
+				return cfg, err
+			}
+			if canceled {
+				continue
+			}
+			next.PrefetchCardMetadataOnStartup = value
+		case "startup_all_images":
+			value, canceled, err := editBoolSetting(colors, "Download All Images on Startup", "When enabled, startup sync prefetches images for all sets. This can take a while.", next.DownloadAllImagesOnStartup)
+			if err != nil {
+				return cfg, err
+			}
+			if canceled {
+				continue
+			}
+			next.DownloadAllImagesOnStartup = value
 		case "sync_card_details":
 			value, canceled, err := editBoolSetting(colors, "Sync Card Details (prices)", "When syncing a set database, also fetch per-card detail stats and prices.", next.SyncCardDetails)
 			if err != nil {
@@ -159,6 +177,8 @@ func settingsMenuOptions(cfg config.Config) []SelectOption {
 		{Label: "Image previews: " + onOff(cfg.ImagePreviewsEnabled), Value: "image_previews"},
 		{Label: "Test image compatibility", Value: "image_compat"},
 		{Label: "Image caching: " + onOff(cfg.ImageCaching), Value: "image_caching"},
+		{Label: "Prefetch card metadata on startup: " + onOff(cfg.PrefetchCardMetadataOnStartup), Value: "startup_prefetch_metadata"},
+		{Label: "Download all images on startup: " + onOff(cfg.DownloadAllImagesOnStartup), Value: "startup_all_images"},
 		{Label: "Sync card details: " + onOff(cfg.SyncCardDetails), Value: "sync_card_details"},
 		{Label: "Colors: " + onOff(cfg.ColorsEnabled), Value: "colors"},
 		{Label: fmt.Sprintf("Request delay: %d ms", cfg.RequestDelayMs), Value: "request_delay"},

@@ -1,5 +1,12 @@
 cards/*
-data/
 cmd/pkmn-tc-value/main.go
 .gitignore
 db.lock
+data/logs/*
+data/sets.db
+data/database.db
+data/config.json
+data/collection.db
+data/cards.db
+data/cards/*
+data/debug.log

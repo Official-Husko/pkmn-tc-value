@@ -40,6 +40,9 @@ func TestResolvePathsUsesDataDirectory(t *testing.T) {
 	if paths.CollectionDBFile != filepath.Join(dataDir, "collection.db") {
 		t.Fatalf("unexpected CollectionDBFile: %q", paths.CollectionDBFile)
 	}
+	if paths.LogsDir != filepath.Join(dataDir, "logs") {
+		t.Fatalf("unexpected LogsDir: %q", paths.LogsDir)
+	}
 }
 
 func TestMigrateLegacyLayoutMovesLegacyFiles(t *testing.T) {
@@ -56,8 +59,12 @@ func TestMigrateLegacyLayoutMovesLegacyFiles(t *testing.T) {
 	}
 
 	legacyCardsDir := filepath.Join(tmp, "cards")
+	legacyLogsDir := filepath.Join(tmp, "logs")
 	if err := os.MkdirAll(legacyCardsDir, 0o755); err != nil {
 		t.Fatalf("mkdir legacy cards: %v", err)
+	}
+	if err := os.MkdirAll(legacyLogsDir, 0o755); err != nil {
+		t.Fatalf("mkdir legacy logs: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(tmp, "config.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatalf("write legacy config: %v", err)
@@ -80,6 +87,9 @@ func TestMigrateLegacyLayoutMovesLegacyFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(legacyCardsDir, "sample.png"), []byte("x"), 0o600); err != nil {
 		t.Fatalf("write legacy card image: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(legacyLogsDir, "sample.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write legacy provider log: %v", err)
+	}
 
 	paths, err := ResolvePaths()
 	if err != nil {
@@ -97,6 +107,7 @@ func TestMigrateLegacyLayoutMovesLegacyFiles(t *testing.T) {
 		paths.CollectionDBFile,
 		paths.DebugLog,
 		filepath.Join(paths.ImageDir, "sample.png"),
+		filepath.Join(paths.LogsDir, "sample.json"),
 	}
 	for _, p := range required {
 		if _, err := os.Stat(p); err != nil {

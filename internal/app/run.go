@@ -33,6 +33,11 @@ func Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if cfg.Debug {
+		if err := os.MkdirAll(paths.LogsDir, 0o755); err != nil {
+			return err
+		}
+	}
 	db, err := store.Load(paths.DBFile, paths.SetsDBFile, paths.CardsDBFile, paths.CollectionDBFile)
 	if err != nil {
 		return err

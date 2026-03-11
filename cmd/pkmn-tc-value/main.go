@@ -18,6 +18,8 @@ import (
 // TODO: add support for multiple variants of 1 card, e.g. holo, reverse holo, full art, secret rare etc. and show them in the detail view
 // TODO: maybe a selection if more than 1 variant exists in the list view, e.g. "Pikachu (3 variants)"
 // TODO: show some stats on start, e.g. total value of collection, total amount of cards, most valuable card etc.
+// TODO: Directly allow searching for new cards when looking at a card
+// TODO: allow looking into the collection, same behavior as for new searches, but with the collection as source
 
 func main() {
 	if err := app.Run(context.Background()); err != nil {

@@ -11,6 +11,7 @@ import (
 	"github.com/Official-Husko/pkmn-tc-value/internal/images"
 	"github.com/Official-Husko/pkmn-tc-value/internal/pricing"
 	pricedata "github.com/Official-Husko/pkmn-tc-value/internal/pricing/pokedata"
+	"github.com/Official-Husko/pkmn-tc-value/internal/providerslog"
 	"github.com/Official-Husko/pkmn-tc-value/internal/repository"
 	"github.com/Official-Husko/pkmn-tc-value/internal/store"
 	"github.com/Official-Husko/pkmn-tc-value/internal/syncer"
@@ -39,9 +40,10 @@ type Container struct {
 
 func New(cfg config.Config, paths config.Paths, db *store.Store) *Container {
 	httpClient := &http.Client{Timeout: 30 * time.Second}
-	catalogProvider := tcgdex.New(httpClient)
-	priceBridge := bridgepokedata.NewResolver(httpClient, time.Duration(cfg.RateLimitCooldownSeconds)*time.Second)
-	priceProvider := pricedata.New(httpClient, priceBridge)
+	responseLogger := providerslog.New(cfg.Debug, paths.LogsDir)
+	catalogProvider := tcgdex.New(httpClient, responseLogger)
+	priceBridge := bridgepokedata.NewResolver(httpClient, time.Duration(cfg.RateLimitCooldownSeconds)*time.Second, responseLogger)
+	priceProvider := pricedata.New(httpClient, priceBridge, responseLogger)
 	cache := images.NewCache(paths.ImageDir)
 	downloader := images.NewDownloader(httpClient, cache, cfg.BackupImageSource, cfg.Debug, paths.DebugLog)
 

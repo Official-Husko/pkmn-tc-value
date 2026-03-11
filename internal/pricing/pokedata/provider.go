@@ -15,6 +15,7 @@ import (
 	"github.com/Official-Husko/pkmn-tc-value/internal/config"
 	"github.com/Official-Husko/pkmn-tc-value/internal/domain"
 	"github.com/Official-Husko/pkmn-tc-value/internal/pricing"
+	"github.com/Official-Husko/pkmn-tc-value/internal/providerslog"
 )
 
 const statsEndpoint = "https://www.pokedata.io/api/cards/stats"
@@ -23,6 +24,7 @@ type Provider struct {
 	client   *http.Client
 	resolver cardIDResolver
 	endpoint string
+	logger   *providerslog.Logger
 
 	mu          sync.Mutex
 	lastRequest time.Time
@@ -32,8 +34,8 @@ type cardIDResolver interface {
 	ResolveCardID(ctx context.Context, set domain.Set, card domain.Card) (string, string, string, error)
 }
 
-func New(client *http.Client, resolver cardIDResolver) pricing.Provider {
-	return &Provider{client: client, resolver: resolver, endpoint: statsEndpoint}
+func New(client *http.Client, resolver cardIDResolver, logger *providerslog.Logger) pricing.Provider {
+	return &Provider{client: client, resolver: resolver, endpoint: statsEndpoint, logger: logger}
 }
 
 func (p *Provider) Name() string {
@@ -143,11 +145,21 @@ func (p *Provider) fetchStatsWithRetry(ctx context.Context, req *http.Request, c
 		if resp.StatusCode >= 300 {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
+			if p.logger != nil {
+				p.logger.LogJSON("pokedata-pricing", req.URL.String(), body)
+			}
 			return fmt.Errorf("request %s failed: %s (%s)", req.URL.String(), resp.Status, strings.TrimSpace(string(body)))
 		}
 
-		decErr := json.NewDecoder(resp.Body).Decode(target)
+		body, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if readErr != nil {
+			return fmt.Errorf("read stats response: %w", readErr)
+		}
+		if p.logger != nil {
+			p.logger.LogJSON("pokedata-pricing", req.URL.String(), body)
+		}
+		decErr := json.Unmarshal(body, target)
 		if decErr != nil {
 			return fmt.Errorf("decode stats response: %w", decErr)
 		}

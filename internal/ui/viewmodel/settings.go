@@ -10,6 +10,8 @@ type SettingsState struct {
 	StartupSyncEnabled bool
 	CardRefreshTTL     string
 	ImagePreviews      bool
+	PrefetchMetadata   bool
+	DownloadAllImages  bool
 	ColorsEnabled      bool
 	RequestDelay       string
 	RateLimitCooldown  string
@@ -22,6 +24,8 @@ func NewSettingsState(cfg config.Config) SettingsState {
 		StartupSyncEnabled: cfg.StartupSyncEnabled,
 		CardRefreshTTL:     itoa(cfg.CardRefreshTTLHours),
 		ImagePreviews:      cfg.ImagePreviewsEnabled,
+		PrefetchMetadata:   cfg.PrefetchCardMetadataOnStartup,
+		DownloadAllImages:  cfg.DownloadAllImagesOnStartup,
 		ColorsEnabled:      cfg.ColorsEnabled,
 		RequestDelay:       itoa(cfg.RequestDelayMs),
 		RateLimitCooldown:  itoa(cfg.RateLimitCooldownSeconds),

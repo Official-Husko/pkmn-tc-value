@@ -27,6 +27,8 @@ const (
 	settingImagePreviews    = "image_previews"
 	settingImageCompatTest  = "image_compat_test"
 	settingImageCaching     = "image_caching"
+	settingStartupMetadata  = "startup_prefetch_metadata"
+	settingStartupAllImages = "startup_all_images"
 	settingSyncCardDetails  = "sync_card_details"
 	settingColors           = "colors"
 	settingRequestDelay     = "request_delay"
@@ -113,6 +115,34 @@ func SettingsForm(cfg config.Config, renderer images.Renderer, theme *huh.Theme)
 				return cfg, err
 			}
 			next.ImageCaching = value
+		case settingStartupMetadata:
+			value, err := editBoolSetting(
+				"Prefetch Card Metadata on Startup",
+				"When enabled, startup sync loads full card metadata for all sets (without downloading images).",
+				next.PrefetchCardMetadataOnStartup,
+				theme,
+			)
+			if err != nil {
+				if errors.Is(err, huh.ErrUserAborted) {
+					continue
+				}
+				return cfg, err
+			}
+			next.PrefetchCardMetadataOnStartup = value
+		case settingStartupAllImages:
+			value, err := editBoolSetting(
+				"Download All Images on Startup",
+				"When enabled, startup sync prefetches images for all sets. This can take a while.",
+				next.DownloadAllImagesOnStartup,
+				theme,
+			)
+			if err != nil {
+				if errors.Is(err, huh.ErrUserAborted) {
+					continue
+				}
+				return cfg, err
+			}
+			next.DownloadAllImagesOnStartup = value
 		case settingSyncCardDetails:
 			value, err := editBoolSetting(
 				"Sync Card Details (prices)",
@@ -224,6 +254,8 @@ func pickSetting(cfg config.Config, theme *huh.Theme) (string, error) {
 					huh.NewOption(fmt.Sprintf("Image previews: %s", onOff(cfg.ImagePreviewsEnabled)), settingImagePreviews),
 					huh.NewOption("Test image compatibility", settingImageCompatTest),
 					huh.NewOption(fmt.Sprintf("Image caching: %s", onOff(cfg.ImageCaching)), settingImageCaching),
+					huh.NewOption(fmt.Sprintf("Prefetch card metadata on startup: %s", onOff(cfg.PrefetchCardMetadataOnStartup)), settingStartupMetadata),
+					huh.NewOption(fmt.Sprintf("Download all images on startup: %s", onOff(cfg.DownloadAllImagesOnStartup)), settingStartupAllImages),
 					huh.NewOption(fmt.Sprintf("Sync card details: %s", onOff(cfg.SyncCardDetails)), settingSyncCardDetails),
 					huh.NewOption(fmt.Sprintf("Colors: %s", onOff(cfg.ColorsEnabled)), settingColors),
 					huh.NewOption(fmt.Sprintf("Request delay: %d ms", cfg.RequestDelayMs), settingRequestDelay),

@@ -15,6 +15,7 @@ import (
 
 	"github.com/Official-Husko/pkmn-tc-value/internal/catalog"
 	"github.com/Official-Husko/pkmn-tc-value/internal/domain"
+	"github.com/Official-Husko/pkmn-tc-value/internal/providerslog"
 	"github.com/Official-Husko/pkmn-tc-value/internal/util"
 )
 
@@ -27,19 +28,21 @@ var nextDataScriptRE = regexp.MustCompile(`(?s)<script id="__NEXT_DATA__" type="
 type Provider struct {
 	client   *http.Client
 	cooldown time.Duration
+	logger   *providerslog.Logger
 
 	mu          sync.RWMutex
 	setNameByID map[string]string
 	setCodeByID map[string]string
 }
 
-func New(client *http.Client, cooldown time.Duration) catalog.Provider {
+func New(client *http.Client, cooldown time.Duration, logger *providerslog.Logger) catalog.Provider {
 	if cooldown <= 0 {
 		cooldown = 30 * time.Second
 	}
 	return &Provider{
 		client:      client,
 		cooldown:    cooldown,
+		logger:      logger,
 		setNameByID: make(map[string]string),
 		setCodeByID: make(map[string]string),
 	}
@@ -198,6 +201,9 @@ func (p *Provider) getJSON(ctx context.Context, endpoint string, target any) err
 	body, err := p.doRequest(ctx, req, false)
 	if err != nil {
 		return fmt.Errorf("request %s: %w", endpoint, err)
+	}
+	if p.logger != nil {
+		p.logger.LogJSON("pokedata-catalog", endpoint, []byte(body))
 	}
 	if err := json.Unmarshal([]byte(body), target); err != nil {
 		return fmt.Errorf("decode response %s: %w", endpoint, err)

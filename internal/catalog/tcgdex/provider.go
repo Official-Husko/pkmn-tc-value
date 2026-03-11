@@ -14,6 +14,7 @@ import (
 
 	"github.com/Official-Husko/pkmn-tc-value/internal/catalog"
 	"github.com/Official-Husko/pkmn-tc-value/internal/domain"
+	"github.com/Official-Husko/pkmn-tc-value/internal/providerslog"
 )
 
 const baseURL = "https://api.tcgdex.net/v2"
@@ -22,14 +23,16 @@ var japaneseSetIDRE = regexp.MustCompile(`\d[a-z]$`)
 
 type Provider struct {
 	client *http.Client
+	logger *providerslog.Logger
 
 	mu      sync.RWMutex
 	setLang map[string]string
 }
 
-func New(client *http.Client) catalog.Provider {
+func New(client *http.Client, logger *providerslog.Logger) catalog.Provider {
 	return &Provider{
 		client:  client,
+		logger:  logger,
 		setLang: make(map[string]string),
 	}
 }
@@ -157,7 +160,14 @@ func (p *Provider) getJSON(ctx context.Context, endpoint string, out any) error 
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("request %s failed: %s (%s)", endpoint, resp.Status, strings.TrimSpace(string(body)))
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", endpoint, err)
+	}
+	if p.logger != nil {
+		p.logger.LogJSON("tcgdex", endpoint, body)
+	}
+	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("decode %s: %w", endpoint, err)
 	}
 	return nil

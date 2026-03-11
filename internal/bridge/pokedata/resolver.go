@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Official-Husko/pkmn-tc-value/internal/domain"
+	"github.com/Official-Husko/pkmn-tc-value/internal/providerslog"
 	"github.com/Official-Husko/pkmn-tc-value/internal/util"
 )
 
@@ -27,6 +28,7 @@ var nextDataScriptRE = regexp.MustCompile(`(?s)<script id="__NEXT_DATA__" type="
 type Resolver struct {
 	client   *http.Client
 	cooldown time.Duration
+	logger   *providerslog.Logger
 
 	mu    sync.RWMutex
 	sets  []setDTO
@@ -74,13 +76,14 @@ type ResolvedSet struct {
 	Code string
 }
 
-func NewResolver(client *http.Client, cooldown time.Duration) *Resolver {
+func NewResolver(client *http.Client, cooldown time.Duration, logger *providerslog.Logger) *Resolver {
 	if cooldown <= 0 {
 		cooldown = 30 * time.Second
 	}
 	return &Resolver{
 		client:   client,
 		cooldown: cooldown,
+		logger:   logger,
 	}
 }
 
@@ -370,6 +373,9 @@ func (r *Resolver) getJSON(ctx context.Context, endpoint string, target any) err
 	body, err := r.doRequest(ctx, req, false)
 	if err != nil {
 		return fmt.Errorf("request %s: %w", endpoint, err)
+	}
+	if r.logger != nil {
+		r.logger.LogJSON("pokedata-bridge", endpoint, []byte(body))
 	}
 	if err := json.Unmarshal([]byte(body), target); err != nil {
 		return fmt.Errorf("decode response %s: %w", endpoint, err)

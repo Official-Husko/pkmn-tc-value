@@ -4,6 +4,12 @@ import "testing"
 
 func TestValidate(t *testing.T) {
 	cfg := Default()
+	if cfg.PrefetchCardMetadataOnStartup {
+		t.Fatal("prefetch card metadata on startup should default to false")
+	}
+	if cfg.DownloadAllImagesOnStartup {
+		t.Fatal("download all images on startup should default to false")
+	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("default config should validate: %v", err)
 	}

@@ -7,9 +7,11 @@ import (
 	"image"
 	"image/png"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -112,12 +114,15 @@ type imageCompatDoneMsg struct {
 	err       error
 }
 
+type uiTickMsg struct{}
+
 type rootModel struct {
 	ctx       context.Context
 	container *bootstrap.Container
 
 	mode     uiMode
 	fatalErr error
+	version  string
 
 	width  int
 	height int
@@ -131,6 +136,8 @@ type rootModel struct {
 	setSyncProgress   syncer.SetSyncProgress
 	setSyncProgressCh chan syncer.SetSyncProgress
 	setSyncDoneCh     chan setSyncDoneMsg
+	startupReveal     int
+	startupRevealGoal int
 
 	messageTitle string
 	messageBody  string
@@ -142,6 +149,10 @@ type rootModel struct {
 	menuOptions       []menuOption
 	menuFiltered      []int
 	menuCursor        int
+	menuCursorVisual  float64
+	menuPrevCursor    int
+	menuTrailFrames   int
+	menuAnimFrame     int
 	menuMaxRows       int
 	menuFilterEnabled bool
 	menuFilterActive  bool
@@ -176,6 +187,9 @@ type rootModel struct {
 
 	busyTitle  string
 	busyStatus string
+
+	statusPulseFrame int
+	uiTickScheduled  bool
 }
 
 func newRootModel(ctx context.Context, container *bootstrap.Container) *rootModel {
@@ -196,6 +210,7 @@ func newRootModel(ctx context.Context, container *bootstrap.Container) *rootMode
 		spinner:       sp,
 		menuFilter:    filterInput,
 		menuMaxRows:   10,
+		version:       detectAppVersion(),
 		settingsDraft: container.Config,
 	}
 }
@@ -207,7 +222,10 @@ func (m *rootModel) Init() tea.Cmd {
 	}
 
 	m.mode = modeStartupSync
-	return tea.Batch(m.spinner.Tick, m.startStartupSyncCmd())
+	m.startupReveal = 1
+	m.startupRevealGoal = 1
+	m.uiTickScheduled = true
+	return tea.Batch(m.spinner.Tick, m.startStartupSyncCmd(), uiTickCmd())
 }
 
 func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -225,6 +243,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case startupProgressMsg:
 		m.startupProgress = msg.progress
+		m.updateStartupRevealGoal()
 		cmds = append(cmds, waitStartupProgress(m.startupProgressCh))
 	case startupDoneMsg:
 		if msg.err != nil {
@@ -303,6 +322,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			8,
 			nextSettingsMenu,
 		)
+	case uiTickMsg:
+		m.uiTickScheduled = false
+		m.stepAnimations()
 	case tea.KeyMsg:
 		if quit := m.globalQuitKey(msg); quit != nil {
 			return m, quit
@@ -324,6 +346,8 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 	}
+
+	m.maybeScheduleUITick(&cmds)
 
 	if len(cmds) == 0 {
 		return m, nil
@@ -370,25 +394,206 @@ func (m *rootModel) spinnerActive() bool {
 	return m.mode == modeStartupSync || m.mode == modeSetSync || m.mode == modeBusy
 }
 
+func uiTickCmd() tea.Cmd {
+	return tea.Tick(90*time.Millisecond, func(time.Time) tea.Msg {
+		return uiTickMsg{}
+	})
+}
+
+func (m *rootModel) maybeScheduleUITick(cmds *[]tea.Cmd) {
+	if m.uiTickScheduled || !m.animationsActive() {
+		return
+	}
+	m.uiTickScheduled = true
+	*cmds = append(*cmds, uiTickCmd())
+}
+
+func (m *rootModel) animationsActive() bool {
+	switch m.mode {
+	case modeStartupSync, modeSetSync, modeBusy:
+		return true
+	case modeMenu:
+		return m.menuKind == menuMain || m.menuTrailFrames > 0 || math.Abs(float64(m.menuCursor)-m.menuCursorVisual) > 0.01
+	case modeCardDetail:
+		return m.cardRefreshing
+	default:
+		return false
+	}
+}
+
+func (m *rootModel) stepAnimations() {
+	m.statusPulseFrame = (m.statusPulseFrame + 1) % 24
+
+	if m.mode == modeMenu {
+		m.menuAnimFrame = (m.menuAnimFrame + 1) % 8
+		if m.menuTrailFrames > 0 {
+			m.menuTrailFrames--
+		}
+		target := float64(m.menuCursor)
+		delta := target - m.menuCursorVisual
+		if math.Abs(delta) < 0.05 {
+			m.menuCursorVisual = target
+		} else {
+			m.menuCursorVisual += delta * 0.35
+		}
+	}
+
+	if m.mode == modeStartupSync && m.startupReveal < m.startupRevealGoal {
+		m.startupReveal++
+	}
+}
+
+func (m *rootModel) updateStartupRevealGoal() {
+	goal := 2 // sets + status
+	if m.startupProgress.CardsTotal > 0 {
+		goal++
+	}
+	if strings.TrimSpace(m.startupProgress.CurrentSet) != "" {
+		goal++
+	}
+	if goal < 1 {
+		goal = 1
+	}
+	m.startupRevealGoal = goal
+	if m.startupReveal < 1 {
+		m.startupReveal = 1
+	}
+	if m.startupReveal > m.startupRevealGoal {
+		m.startupReveal = m.startupRevealGoal
+	}
+}
+
 func (m *rootModel) styles() uitheme.Styles {
 	return uitheme.NewStyles(m.container.Config.ColorsEnabled)
 }
 
 func (m *rootModel) startStartupSyncCmd() tea.Cmd {
 	m.startupProgress = syncer.StartupProgress{Stage: "sets", Status: "Fetching set list"}
+	m.startupReveal = 1
+	m.updateStartupRevealGoal()
 	m.startupProgressCh = make(chan syncer.StartupProgress, 1024)
 	m.startupDoneCh = make(chan startupDoneMsg, 1)
 	go func() {
-		stats, err := m.container.StartupSync.Run(m.ctx, func(p syncer.StartupProgress) {
+		reportProgress := func(p syncer.StartupProgress) {
 			select {
 			case m.startupProgressCh <- p:
 			default:
 			}
-		})
+		}
+		stats, err := m.container.StartupSync.Run(m.ctx, reportProgress)
+		if err == nil {
+			switch {
+			case m.container.Config.DownloadAllImagesOnStartup:
+				err = m.prefetchSetDataOnStartup(reportProgress, true)
+			case m.container.Config.PrefetchCardMetadataOnStartup:
+				err = m.prefetchSetDataOnStartup(reportProgress, false)
+			}
+		}
 		m.startupDoneCh <- startupDoneMsg{stats: stats, err: err}
 		close(m.startupProgressCh)
 	}()
 	return tea.Batch(waitStartupProgress(m.startupProgressCh), waitStartupDone(m.startupDoneCh))
+}
+
+func (m *rootModel) prefetchSetDataOnStartup(report func(syncer.StartupProgress), withImages bool) error {
+	sets, err := m.container.Sets.List()
+	if err != nil {
+		return err
+	}
+	stageName := "metadata"
+	if withImages {
+		stageName = "images"
+	}
+	if len(sets) == 0 {
+		report(syncer.StartupProgress{Stage: stageName, Status: "No sets available for startup prefetch"})
+		return nil
+	}
+
+	totalSets := len(sets)
+	estimatedCards := 0
+	for _, set := range sets {
+		if set.Total > 0 {
+			estimatedCards += set.Total
+		}
+	}
+	doneCards := 0
+
+	for i, set := range sets {
+		select {
+		case <-m.ctx.Done():
+			return m.ctx.Err()
+		default:
+		}
+
+		report(syncer.StartupProgress{
+			Stage:      stageName,
+			Status:     fmt.Sprintf("Prefetching %s for %s (%d/%d)", stageName, set.Name, i+1, totalSets),
+			SetsDone:   i,
+			SetsTotal:  totalSets,
+			CardsDone:  doneCards,
+			CardsTotal: estimatedCards,
+			CurrentSet: set.Name,
+		})
+
+		var currentSetDone int
+		var currentSetTotal int
+		_, err := m.container.SetSync.SyncSet(m.ctx, set.ID, syncer.SetSyncOptions{
+			ImageCaching:    withImages,
+			SyncCardDetails: false,
+			Config:          m.container.Config,
+		}, func(p syncer.SetSyncProgress) {
+			if p.Done < 0 || p.Total < 0 {
+				return
+			}
+			currentSetDone = p.Done
+			currentSetTotal = p.Total
+			total := estimatedCards
+			if total < doneCards+p.Total {
+				total = doneCards + p.Total
+			}
+			report(syncer.StartupProgress{
+				Stage:      stageName,
+				Status:     fmt.Sprintf("Prefetching %s for %s", stageName, set.Name),
+				SetsDone:   i,
+				SetsTotal:  totalSets,
+				CardsDone:  doneCards + p.Done,
+				CardsTotal: total,
+				CurrentSet: set.Name,
+			})
+		})
+		if err != nil {
+			return err
+		}
+
+		if currentSetTotal > 0 {
+			doneCards += currentSetDone
+		} else if set.Total > 0 {
+			doneCards += set.Total
+		}
+
+		if estimatedCards < doneCards {
+			estimatedCards = doneCards
+		}
+		report(syncer.StartupProgress{
+			Stage:      stageName,
+			Status:     fmt.Sprintf("Finished %s prefetch for %s (%d/%d)", stageName, set.Name, i+1, totalSets),
+			SetsDone:   i + 1,
+			SetsTotal:  totalSets,
+			CardsDone:  doneCards,
+			CardsTotal: estimatedCards,
+			CurrentSet: set.Name,
+		})
+	}
+
+	report(syncer.StartupProgress{
+		Stage:      stageName,
+		Status:     fmt.Sprintf("Startup %s prefetch complete", stageName),
+		SetsDone:   totalSets,
+		SetsTotal:  totalSets,
+		CardsDone:  doneCards,
+		CardsTotal: estimatedCards,
+	})
+	return nil
 }
 
 func (m *rootModel) startSetSyncCmd() tea.Cmd {
@@ -501,6 +706,9 @@ func (m *rootModel) setMenu(kind menuKind, title, description string, options []
 	m.menuOptions = options
 	m.menuFiltered = make([]int, 0, len(options))
 	m.menuCursor = 0
+	m.menuCursorVisual = 0
+	m.menuPrevCursor = 0
+	m.menuTrailFrames = 0
 	m.menuMaxRows = maxRows
 	m.menuFilterEnabled = filtering
 	m.menuFilterActive = false
@@ -524,14 +732,33 @@ func (m *rootModel) applyMenuFilter() {
 	}
 	if len(m.menuFiltered) == 0 {
 		m.menuCursor = 0
+		m.menuCursorVisual = 0
+		m.menuTrailFrames = 0
 		return
 	}
-	if m.menuCursor >= len(m.menuFiltered) {
-		m.menuCursor = len(m.menuFiltered) - 1
-	}
-	if m.menuCursor < 0 {
+	m.moveMenuCursor(m.menuCursor)
+}
+
+func (m *rootModel) moveMenuCursor(next int) {
+	if len(m.menuFiltered) == 0 {
 		m.menuCursor = 0
+		m.menuCursorVisual = 0
+		m.menuTrailFrames = 0
+		return
 	}
+	if next < 0 {
+		next = 0
+	}
+	max := len(m.menuFiltered) - 1
+	if next > max {
+		next = max
+	}
+	if next == m.menuCursor {
+		return
+	}
+	m.menuPrevCursor = m.menuCursor
+	m.menuCursor = next
+	m.menuTrailFrames = 4
 }
 
 func (m *rootModel) updateMenu(msg tea.KeyMsg) tea.Cmd {
@@ -557,27 +784,17 @@ func (m *rootModel) updateMenu(msg tea.KeyMsg) tea.Cmd {
 			m.menuFilter.Focus()
 		}
 	case "up", "k":
-		if m.menuCursor > 0 {
-			m.menuCursor--
-		}
+		m.moveMenuCursor(m.menuCursor - 1)
 	case "down", "j":
-		if m.menuCursor < len(m.menuFiltered)-1 {
-			m.menuCursor++
-		}
+		m.moveMenuCursor(m.menuCursor + 1)
 	case "pgup":
-		m.menuCursor -= m.menuMaxRows
-		if m.menuCursor < 0 {
-			m.menuCursor = 0
-		}
+		m.moveMenuCursor(m.menuCursor - m.menuMaxRows)
 	case "pgdown":
-		m.menuCursor += m.menuMaxRows
-		if m.menuCursor > len(m.menuFiltered)-1 {
-			m.menuCursor = len(m.menuFiltered) - 1
-		}
+		m.moveMenuCursor(m.menuCursor + m.menuMaxRows)
 	case "home":
-		m.menuCursor = 0
+		m.moveMenuCursor(0)
 	case "end":
-		m.menuCursor = len(m.menuFiltered) - 1
+		m.moveMenuCursor(len(m.menuFiltered) - 1)
 	case "enter":
 		if len(m.menuFiltered) == 0 {
 			return nil
@@ -649,8 +866,7 @@ func (m *rootModel) runNextAction(action nextAction) tea.Cmd {
 	case nextQuit:
 		return tea.Quit
 	case nextMainMenu:
-		m.openMainMenu()
-		return nil
+		return m.openMainMenu()
 	case nextLanguageMenu:
 		return m.openLanguageMenu()
 	case nextSetMenu:
@@ -744,20 +960,22 @@ func (m *rootModel) updateMessage(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (m *rootModel) openMainMenu() {
+func (m *rootModel) openMainMenu() tea.Cmd {
 	m.setMenu(
 		menuMain,
 		"Pokemon Card Value",
-		"Pick what to do next.",
+		"Quickly browse sets, lookup cards, and track your collection.",
 		[]menuOption{
-			{Label: "Browse sets", Value: "browse"},
-			{Label: "Settings", Value: "settings"},
-			{Label: "Quit", Value: "quit"},
+			{Label: "Browse sets", Description: "Open language and set picker", Value: "browse"},
+			{Label: "Settings", Description: "Tool and sync preferences", Value: "settings"},
+			{Label: "Quit", Description: "Exit the application", Value: "quit"},
 		},
 		false,
 		8,
 		nextQuit,
 	)
+	m.menuAnimFrame = 0
+	return nil
 }
 
 func (m *rootModel) openLanguageMenu() tea.Cmd {
@@ -869,23 +1087,41 @@ func (m *rootModel) openCardDetail(card domain.Card) tea.Cmd {
 	m.card = card
 	m.cardStatus = "Loaded from local data"
 	m.cardRefreshing = false
+	m.cardSelected = 0
+
+	autoSaved := false
 	if m.container.Config.SaveSearchedCardsDefault {
-		m.cardSelected = 1
-	} else {
-		m.cardSelected = 0
+		if err := m.container.Collection.Add(m.card.ID); err != nil {
+			m.cardStatus = "Auto-save failed"
+		} else {
+			m.cardStatus = "Saved to collection automatically"
+			autoSaved = true
+		}
 	}
 	m.loadCardImageWidget()
 
 	needsRefresh := m.container.CardRefresh.NeedsRefresh(card, m.container.Config) || shouldRefreshImage(card, m.container.Config)
 	if needsRefresh {
 		m.cardRefreshing = true
-		m.cardStatus = "Refreshing prices..."
+		if autoSaved {
+			m.cardStatus = "Refreshing prices... (saved to collection)"
+		} else {
+			m.cardStatus = "Refreshing prices..."
+		}
 		return m.refreshCardCmd(card)
 	}
 	return nil
 }
 
 func (m *rootModel) updateCardDetail(msg tea.KeyMsg) tea.Cmd {
+	if m.container.Config.SaveSearchedCardsDefault {
+		switch msg.String() {
+		case "enter", "c", "esc", "q", "a":
+			return m.runNextAction(nextCardLookup)
+		}
+		return nil
+	}
+
 	switch msg.String() {
 	case "left", "h":
 		if m.cardSelected > 0 {
@@ -954,6 +1190,8 @@ func (m *rootModel) openSettingsMenu() {
 			{Label: "Image previews: " + onOff(m.settingsDraft.ImagePreviewsEnabled), Value: "image_previews"},
 			{Label: "Test image compatibility", Value: "image_compat"},
 			{Label: "Image caching: " + onOff(m.settingsDraft.ImageCaching), Value: "image_caching"},
+			{Label: "Prefetch card metadata on startup: " + onOff(m.settingsDraft.PrefetchCardMetadataOnStartup), Value: "startup_prefetch_metadata"},
+			{Label: "Download all images on startup: " + onOff(m.settingsDraft.DownloadAllImagesOnStartup), Value: "startup_all_images"},
 			{Label: fmt.Sprintf("Image download workers: %d", m.settingsDraft.ImageDownloadWorkers), Value: "image_download_workers"},
 			{Label: "Backup image source: " + onOff(m.settingsDraft.BackupImageSource), Value: "backup_image_source"},
 			{Label: "Sync card details: " + onOff(m.settingsDraft.SyncCardDetails), Value: "sync_card_details"},
@@ -990,6 +1228,12 @@ func (m *rootModel) onSettingsMenuSelect(value string) tea.Cmd {
 	case "image_caching":
 		m.openBoolSetting("image_caching", "Image Caching", "Store converted PNG card images in local cache.", m.settingsDraft.ImageCaching)
 		return nil
+	case "startup_prefetch_metadata":
+		m.openBoolSetting("startup_prefetch_metadata", "Prefetch Card Metadata on Startup", "When enabled, startup sync loads full card metadata for all sets (without downloading images).", m.settingsDraft.PrefetchCardMetadataOnStartup)
+		return nil
+	case "startup_all_images":
+		m.openBoolSetting("startup_all_images", "Download All Images on Startup", "When enabled, startup sync prefetches images for all sets. This can take a while.", m.settingsDraft.DownloadAllImagesOnStartup)
+		return nil
 	case "image_download_workers":
 		m.openIntSetting("image_download_workers", "Image Download Workers", "Parallel workers for set image downloads. Allowed range: 1 to 32.", m.settingsDraft.ImageDownloadWorkers, 1, 32)
 		return nil
@@ -1009,7 +1253,7 @@ func (m *rootModel) onSettingsMenuSelect(value string) tea.Cmd {
 		m.openIntSetting("rate_limit_cooldown", "Rate-limit Cooldown (seconds)", "Allowed range: 1 to 300.", m.settingsDraft.RateLimitCooldownSeconds, 1, 300)
 		return nil
 	case "save_searched":
-		m.openBoolSetting("save_searched", "Save Searched Cards by Default", "When true, Enter defaults to Add to collection in card detail.", m.settingsDraft.SaveSearchedCardsDefault)
+		m.openBoolSetting("save_searched", "Save Searched Cards by Default", "When true, looked-up cards are auto-saved and the Add button is hidden.", m.settingsDraft.SaveSearchedCardsDefault)
 		return nil
 	case "user_agent":
 		m.openTextSetting("user_agent", "HTTP User Agent", "User-Agent header sent to remote requests.", m.settingsDraft.UserAgent, false)
@@ -1020,8 +1264,7 @@ func (m *rootModel) onSettingsMenuSelect(value string) tea.Cmd {
 			return nil
 		}
 		if m.settingsDraft == m.container.Config {
-			m.openMainMenu()
-			return nil
+			return m.openMainMenu()
 		}
 		if err := config.Save(m.container.Paths.ConfigFile, m.settingsDraft); err != nil {
 			m.openMessage("Settings Error", err.Error(), nextSettingsMenu)
@@ -1031,8 +1274,7 @@ func (m *rootModel) onSettingsMenuSelect(value string) tea.Cmd {
 		m.openMessage("Settings Saved", "The tool configuration was updated.", nextMainMenu)
 		return nil
 	case "back_no_save":
-		m.openMainMenu()
-		return nil
+		return m.openMainMenu()
 	}
 	return nil
 }
@@ -1072,6 +1314,10 @@ func (m *rootModel) applyBoolSetting(key string, value bool) {
 		m.settingsDraft.ImagePreviewsEnabled = value
 	case "image_caching":
 		m.settingsDraft.ImageCaching = value
+	case "startup_prefetch_metadata":
+		m.settingsDraft.PrefetchCardMetadataOnStartup = value
+	case "startup_all_images":
+		m.settingsDraft.DownloadAllImagesOnStartup = value
 	case "backup_image_source":
 		m.settingsDraft.BackupImageSource = value
 	case "sync_card_details":
@@ -1105,11 +1351,17 @@ func (m *rootModel) applyTextSetting(key string, value string) {
 
 func (m *rootModel) viewMenu() string {
 	styles := m.styles()
-	lines := []string{
-		styles.Title.Render(m.menuTitle),
-		styles.Muted.Render(m.menuDescription),
-		"",
+	lines := make([]string, 0, 24)
+	section := "Menu"
+	subtitle := m.menuTitle
+
+	if m.menuKind == menuMain {
+		section = "Main Menu"
+		lines = append(lines, m.viewMainMenuHero(styles), "")
+	} else if strings.TrimSpace(m.menuDescription) != "" {
+		lines = append(lines, styles.Muted.Render(m.menuDescription), "")
 	}
+
 	if m.menuFilterEnabled {
 		filterView := m.menuFilter.View()
 		if m.menuFilterActive {
@@ -1117,8 +1369,10 @@ func (m *rootModel) viewMenu() string {
 		} else {
 			filterView = styles.Muted.Render(filterView)
 		}
-		lines = append(lines, filterView, "")
+		countLine := styles.Muted.Render(fmt.Sprintf("%d options", len(m.menuFiltered)))
+		lines = append(lines, filterView, countLine, "")
 	}
+
 	if len(m.menuFiltered) == 0 {
 		lines = append(lines, styles.Muted.Render("No matching options."))
 	} else {
@@ -1136,59 +1390,110 @@ func (m *rootModel) viewMenu() string {
 			if strings.TrimSpace(option.Description) != "" {
 				label += " " + styles.Muted.Render("· "+option.Description)
 			}
+			if i == m.menuPrevCursor && i != m.menuCursor && m.menuTrailFrames > 0 {
+				trailPrefixes := []string{"  ", "· ", "∙ ", "◦ ", "• "}
+				trailPrefix := trailPrefixes[clampInt(m.menuTrailFrames, 0, len(trailPrefixes)-1)]
+				lines = append(lines, styles.Muted.Render(trailPrefix+label))
+				continue
+			}
+			prefix := "  "
 			if i == m.menuCursor {
-				lines = append(lines, styles.Active.Render(label))
+				traveling := math.Abs(float64(m.menuCursor)-m.menuCursorVisual) > 0.10
+				if m.menuKind == menuMain {
+					frames := []string{"▸", "▹", "▸", "▹"}
+					prefix = frames[m.menuAnimFrame%len(frames)] + " "
+					if traveling {
+						prefix = "▹ "
+					}
+				} else {
+					prefix = "▸ "
+					if traveling {
+						prefix = "▹ "
+					}
+				}
+			}
+			if i == m.menuCursor {
+				lines = append(lines, styles.Active.Render(prefix+label))
 			} else {
-				lines = append(lines, styles.Action.Render(label))
+				lines = append(lines, styles.Action.Render(prefix+label))
 			}
 		}
+		if len(m.menuFiltered) > m.menuMaxRows {
+			lines = append(lines, "", styles.Muted.Render(fmt.Sprintf("Showing %d-%d of %d", start+1, end, len(m.menuFiltered))))
+		}
 	}
+
 	hints := "Enter: Select • Esc: Back • ↑/↓: Move"
 	if m.menuFilterEnabled {
 		hints += " • /: Filter"
 	}
+	if m.menuKind == menuMain {
+		hints += " • Ctrl+C: Quit"
+	}
+
 	lines = append(lines, "", styles.Muted.Render(hints))
-	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(lines, "\n"))
+	content := strings.Join(lines, "\n")
+	return m.renderScreenShell(styles, section, subtitle, content)
+}
+
+func (m *rootModel) viewMainMenuHero(styles uitheme.Styles) string {
+	frames := []string{"◜", "◠", "◝", "◞", "◡", "◟"}
+	frame := frames[m.menuAnimFrame%len(frames)]
+	badge := styles.Active.Copy().Padding(0, 1).Render(frame + " READY")
+	title := styles.Title.Copy().Bold(true).Render("PKMN TCG VALUE")
+	version := styles.Muted.Render("v" + m.version)
+	subtitle := styles.Muted.Render(m.menuDescription)
+
+	head := lipgloss.JoinHorizontal(lipgloss.Center, title, "  ", version)
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		badge,
+		"",
+		head,
+		subtitle,
+	)
+
+	border := lipgloss.RoundedBorder()
+	return styles.Card.Copy().
+		Border(border).
+		BorderForeground(uitheme.Gold).
+		Padding(1, 2).
+		Render(content)
 }
 
 func (m *rootModel) viewInput() string {
 	styles := m.styles()
 	lines := []string{
-		styles.Title.Render(m.inputTitle),
 		styles.Muted.Render(m.inputDescription),
-		"",
 		m.input.View(),
 	}
 	if m.inputError != "" {
 		lines = append(lines, "", styles.Warn.Render(m.inputError))
 	}
 	lines = append(lines, "", styles.Muted.Render("Enter: Confirm • Esc: Back"))
-	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(lines, "\n"))
+	return m.renderScreenShell(styles, "Input", m.inputTitle, strings.Join(lines, "\n"))
 }
 
 func (m *rootModel) viewMessage() string {
 	styles := m.styles()
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
-		styles.Title.Render(m.messageTitle),
-		"",
 		m.messageBody,
 		"",
 		styles.Muted.Render("Enter: Continue • Esc: Close"),
 	)
-	return lipgloss.NewStyle().Padding(1, 2).Render(content)
+	return m.renderScreenShell(styles, "Message", m.messageTitle, content)
 }
 
 func (m *rootModel) viewBusy() string {
 	styles := m.styles()
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
-		styles.Title.Render(m.busyTitle),
-		"",
 		fmt.Sprintf("%s %s", m.spinner.View(), m.busyStatus),
+		fmt.Sprintf("%s %s", m.statusPulse(styles, "info"), styles.Muted.Render("Working...")),
 		styles.Muted.Render("Please wait..."),
 	)
-	return lipgloss.NewStyle().Padding(1, 2).Render(content)
+	return m.renderScreenShell(styles, "Working", m.busyTitle, content)
 }
 
 func (m *rootModel) viewStartupSync() string {
@@ -1197,20 +1502,38 @@ func (m *rootModel) viewStartupSync() string {
 	if m.startupProgress.SetsTotal > 0 {
 		setPercent = float64(m.startupProgress.SetsDone) / float64(m.startupProgress.SetsTotal)
 	}
-	body := []string{
-		styles.Title.Render("Startup Sync"),
-		"",
-		fmt.Sprintf("%s Sets  %s %d/%d", m.spinner.View(), renderBar(setPercent, 36), m.startupProgress.SetsDone, m.startupProgress.SetsTotal),
+	rows := []string{
+		fmt.Sprintf(
+			"%s Sets  %s %d/%d  %s",
+			m.spinner.View(),
+			renderBar(setPercent, 32),
+			m.startupProgress.SetsDone,
+			m.startupProgress.SetsTotal,
+			formatPercent(setPercent),
+		),
 	}
 	if m.startupProgress.CardsTotal > 0 {
 		cardPercent := float64(m.startupProgress.CardsDone) / float64(m.startupProgress.CardsTotal)
-		body = append(body, fmt.Sprintf("Cards %s %d/%d", renderBar(cardPercent, 36), m.startupProgress.CardsDone, m.startupProgress.CardsTotal))
+		rows = append(rows, fmt.Sprintf(
+			"Cards %s %d/%d  %s",
+			renderBar(cardPercent, 32),
+			m.startupProgress.CardsDone,
+			m.startupProgress.CardsTotal,
+			formatPercent(cardPercent),
+		))
 	}
-	body = append(body, "", "Status: "+m.startupProgress.Status)
+	rows = append(rows, styles.Label.Render("Status:")+" "+m.statusPulse(styles, "info")+" "+m.startupProgress.Status)
 	if m.startupProgress.CurrentSet != "" {
-		body = append(body, "Current: "+m.startupProgress.CurrentSet)
+		rows = append(rows, styles.Label.Render("Current:")+" "+m.startupProgress.CurrentSet)
 	}
-	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(body, "\n"))
+
+	visible := clampInt(m.startupReveal, 1, len(rows))
+	body := make([]string, 0, len(rows)+2)
+	body = append(body, rows[:visible]...)
+	if visible < len(rows) {
+		body = append(body, styles.Muted.Render("…"))
+	}
+	return m.renderScreenShell(styles, "Startup", "Catalog and optional prefetch tasks", strings.Join(body, "\n"))
 }
 
 func (m *rootModel) viewSetSync() string {
@@ -1223,28 +1546,76 @@ func (m *rootModel) viewSetSync() string {
 	if m.setSyncProgress.Total > 0 {
 		count = fmt.Sprintf(" (%d/%d)", m.setSyncProgress.Done, m.setSyncProgress.Total)
 	}
+	percent := 0.0
+	if m.setSyncProgress.Total > 0 {
+		percent = float64(m.setSyncProgress.Done) / float64(m.setSyncProgress.Total)
+	}
 	body := lipgloss.JoinVertical(
 		lipgloss.Left,
-		styles.Title.Render("Downloading Database"),
-		"",
 		fmt.Sprintf("%s Syncing %s", m.spinner.View(), m.selectedSet.Name),
-		fmt.Sprintf("Stage: %s", m.setSyncProgress.Stage),
-		"Status: "+status+count,
+		fmt.Sprintf("Stage: %s", strings.ToUpper(strings.TrimSpace(m.setSyncProgress.Stage))),
+		fmt.Sprintf("Progress: %s %s", renderBar(percent, 30), formatPercent(percent)),
+		"Status: "+m.statusPulse(styles, "info")+" "+status+count,
 		styles.Muted.Render("Please wait..."),
 	)
-	return lipgloss.NewStyle().Padding(1, 2).Render(body)
+	return m.renderScreenShell(styles, "Set Sync", m.selectedSet.Name, body)
 }
 
 func (m *rootModel) viewCardDetail() string {
 	styles := m.styles()
 	leftWidth, rightWidth, panelHeight := detailLayout(m.width, m.height)
-	lines := append(viewmodel.DetailLines(m.card), "", "Status: "+m.cardStatus, "", renderActionRow(styles, m.cardSelected))
+	statusLine := styles.Muted.Render(m.cardStatus)
+	switch {
+	case strings.Contains(strings.ToLower(m.cardStatus), "failed"):
+		statusLine = styles.Warn.Render(m.cardStatus)
+	case strings.Contains(strings.ToLower(m.cardStatus), "updated"), strings.Contains(strings.ToLower(m.cardStatus), "saved"):
+		statusLine = styles.Success.Render(m.cardStatus)
+	}
+	statusKind := "info"
+	if strings.Contains(strings.ToLower(m.cardStatus), "failed") {
+		statusKind = "warn"
+	}
+	if strings.Contains(strings.ToLower(m.cardStatus), "updated") || strings.Contains(strings.ToLower(m.cardStatus), "saved") {
+		statusKind = "ok"
+	}
+	hints := "Esc/C: Close"
+	if !m.container.Config.SaveSearchedCardsDefault {
+		hints = "Esc/C: Close  •  A: Add"
+	}
+	lines := append(
+		viewmodel.DetailLines(m.card),
+		"",
+		"Status: "+m.statusPulse(styles, statusKind)+" "+statusLine,
+		"",
+		renderActionRow(styles, m.cardSelected, m.container.Config.SaveSearchedCardsDefault),
+		styles.Muted.Render(hints),
+	)
 	details := styles.Card.Copy().Width(rightWidth).Height(panelHeight).Render(strings.Join(lines, "\n"))
 	title := styles.Title.Render("Card Detail")
 	imagePane := m.renderCardImagePane(leftWidth, panelHeight)
 	layout := lipgloss.JoinHorizontal(lipgloss.Top, imagePane, " ", details)
 	view := lipgloss.NewStyle().Padding(1, 2).Render(title + "\n\n" + layout)
 	return view + m.renderCardImageOverlay(leftWidth, panelHeight)
+}
+
+func (m *rootModel) renderScreenShell(styles uitheme.Styles, section string, subtitle string, body string) string {
+	headerLeft := styles.Active.Copy().Padding(0, 1).Render("PKMN TCG VALUE")
+	headerRight := styles.Muted.Render("v" + m.version + " • " + section)
+	header := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		headerLeft,
+		" ",
+		headerRight,
+	)
+
+	content := []string{header}
+	if strings.TrimSpace(subtitle) != "" && section != subtitle {
+		content = append(content, styles.Muted.Render(subtitle))
+	}
+	content = append(content, "", body)
+
+	panel := styles.Card.Copy().BorderForeground(uitheme.Blue).Padding(1, 2).Render(strings.Join(content, "\n"))
+	return lipgloss.NewStyle().Padding(1, 2).Render(panel)
 }
 
 func (m *rootModel) renderCardImagePane(width int, height int) string {
@@ -1288,7 +1659,16 @@ func (m *rootModel) renderCardImageOverlay(panelWidth int, panelHeight int) stri
 	return b.String()
 }
 
-func renderActionRow(styles uitheme.Styles, selected int) string {
+func renderActionRow(styles uitheme.Styles, selected int, autoSave bool) string {
+	if autoSave {
+		return lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			styles.Active.Render("C: Close (Enter)"),
+			" ",
+			styles.Success.Render("Auto-saved"),
+		)
+	}
+
 	closeLabel := "Close"
 	addLabel := "Add to collection"
 	closeStyle := styles.Action
@@ -1388,6 +1768,29 @@ func fitImageCells(imagePath string, maxWidth int, maxHeight int) (int, int) {
 	return renderWidth, renderHeight
 }
 
+func (m *rootModel) statusPulse(styles uitheme.Styles, kind string) string {
+	frames := []string{"·", "•", "◦", "•"}
+	glyph := frames[m.statusPulseFrame%len(frames)]
+	switch kind {
+	case "ok":
+		return styles.Success.Render(glyph)
+	case "warn":
+		return styles.Warn.Render(glyph)
+	default:
+		return styles.Label.Render(glyph)
+	}
+}
+
+func clampInt(value int, min int, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
 func renderBar(percent float64, width int) string {
 	if percent < 0 {
 		percent = 0
@@ -1396,7 +1799,17 @@ func renderBar(percent float64, width int) string {
 		percent = 1
 	}
 	filled := int(percent * float64(width))
-	return "[" + strings.Repeat("=", filled) + strings.Repeat(".", width-filled) + "]"
+	return "▕" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "▏"
+}
+
+func formatPercent(value float64) string {
+	if value < 0 {
+		value = 0
+	}
+	if value > 1 {
+		value = 1
+	}
+	return fmt.Sprintf("%3.0f%%", value*100)
 }
 
 func onOff(v bool) string {
@@ -1412,6 +1825,28 @@ func normalizeLanguage(value string) string {
 		return "unknown"
 	}
 	return strings.ToLower(trimmed)
+}
+
+func detectAppVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	if v := strings.TrimSpace(info.Main.Version); v != "" && v != "(devel)" {
+		return strings.TrimPrefix(v, "v")
+	}
+	for _, setting := range info.Settings {
+		if setting.Key == "vcs.revision" {
+			rev := strings.TrimSpace(setting.Value)
+			if len(rev) >= 7 {
+				return "dev-" + rev[:7]
+			}
+			if rev != "" {
+				return "dev-" + rev
+			}
+		}
+	}
+	return "dev"
 }
 
 func shouldRefreshImage(card domain.Card, cfg config.Config) bool {
