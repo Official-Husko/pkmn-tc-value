@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Official-Husko/pkmn-tc-value/internal/store"
 )
@@ -101,6 +102,7 @@ func LoadOrCreate(path string) (Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config file: %w", err)
 	}
+	cfg.APIKeys = normalizeAPIKeys(cfg.APIKeys)
 	var legacy struct {
 		ImageCaching   *bool `json:"imageCaching"`
 		SaveCardImages *bool `json:"saveCardImages"`
@@ -117,6 +119,7 @@ func LoadOrCreate(path string) (Config, error) {
 }
 
 func Save(path string, cfg Config) error {
+	cfg.APIKeys = normalizeAPIKeys(cfg.APIKeys)
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -125,4 +128,27 @@ func Save(path string, cfg Config) error {
 		return fmt.Errorf("encode config file: %w", err)
 	}
 	return store.WriteFileAtomically(path, data, 0o600)
+}
+
+func normalizeAPIKeys(keys []string) []string {
+	if len(keys) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(keys))
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		trimmed := strings.TrimSpace(key)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

@@ -59,9 +59,17 @@ func (s *StartupService) Run(ctx context.Context, progress func(StartupProgress)
 			if priceProviderSetName == "" && ok {
 				priceProviderSetName = strings.TrimSpace(existing.PriceProviderSetName)
 			}
+			priceProviderSetID := strings.TrimSpace(remote.PriceProviderSetID)
+			if priceProviderSetID == "" && ok {
+				priceProviderSetID = strings.TrimSpace(existing.PriceProviderSetID)
+			}
 			priceProviderSetCode := strings.TrimSpace(remote.PriceProviderSetCode)
 			if priceProviderSetCode == "" && ok {
 				priceProviderSetCode = strings.TrimSpace(existing.PriceProviderSetCode)
+			}
+			englishName := strings.TrimSpace(remote.EnglishName)
+			if englishName == "" && ok {
+				englishName = strings.TrimSpace(existing.EnglishName)
 			}
 			if !ok {
 				stats.NewSets++
@@ -72,7 +80,9 @@ func (s *StartupService) Run(ctx context.Context, progress func(StartupProgress)
 				ID:                   remote.ID,
 				Language:             remote.Language,
 				Name:                 remote.Name,
+				EnglishName:          englishName,
 				SetCode:              setCode,
+				PriceProviderSetID:   priceProviderSetID,
 				PriceProviderSetName: priceProviderSetName,
 				PriceProviderSetCode: priceProviderSetCode,
 				Series:               remote.Series,
@@ -98,6 +108,14 @@ func (s *StartupService) Run(ctx context.Context, progress func(StartupProgress)
 						}
 						if strings.TrimSpace(card.Language) == "" && strings.TrimSpace(remote.Language) != "" {
 							card.Language = remote.Language
+							updated = true
+						}
+						if strings.TrimSpace(card.SetEnglishName) == "" && strings.TrimSpace(englishName) != "" {
+							card.SetEnglishName = englishName
+							updated = true
+						}
+						if strings.TrimSpace(card.PriceProviderSetID) == "" && strings.TrimSpace(priceProviderSetID) != "" {
+							card.PriceProviderSetID = priceProviderSetID
 							updated = true
 						}
 						if updated {

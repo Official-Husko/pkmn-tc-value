@@ -4,6 +4,8 @@ func Default() Config {
 	return Config{
 		StartupSyncEnabled:            true,
 		Debug:                         false,
+		APIKeys:                       nil,
+		APIKeyDailyLimit:              100,
 		CardRefreshTTLHours:           48,
 		ImagePreviewsEnabled:          true,
 		ImageCaching:                  true,
@@ -16,6 +18,7 @@ func Default() Config {
 		RequestDelayMs:                1200,
 		RateLimitCooldownSeconds:      30,
 		SaveSearchedCardsDefault:      true,
+		LastViewedSetOnTop:            true,
 		UserAgent:                     "pkmn-tc-value/1.0 (by Official Husko on GitHub)",
 	}
 }

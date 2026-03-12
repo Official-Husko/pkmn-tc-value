@@ -22,11 +22,12 @@ type Store struct {
 }
 
 type mainFileData struct {
-	Meta       Meta                              `json:"meta"`
-	SyncState  domain.SyncState                  `json:"syncState"`
-	Collection map[string]domain.CollectionEntry `json:"collection,omitempty"`
-	Sets       map[string]domain.Set             `json:"sets,omitempty"`
-	CardsBySet map[string]map[string]domain.Card `json:"cardsBySet,omitempty"`
+	Meta        Meta                              `json:"meta"`
+	SyncState   domain.SyncState                  `json:"syncState"`
+	APIKeyUsage map[string]domain.APIKeyUsage     `json:"apiKeyUsage,omitempty"`
+	Collection  map[string]domain.CollectionEntry `json:"collection,omitempty"`
+	Sets        map[string]domain.Set             `json:"sets,omitempty"`
+	CardsBySet  map[string]map[string]domain.Card `json:"cardsBySet,omitempty"`
 }
 
 type setsFileData struct {
@@ -65,6 +66,9 @@ func Load(mainPath, setsPath, cardsPath, collectionPath string) (*Store, error) 
 		}
 		db.Meta = mainData.Meta
 		db.SyncState = mainData.SyncState
+		if mainData.APIKeyUsage != nil {
+			db.APIKeyUsage = mainData.APIKeyUsage
+		}
 		if mainData.Collection != nil {
 			db.Collection = mainData.Collection
 		}
@@ -130,8 +134,9 @@ func (s *Store) Update(fn func(*DB) error) error {
 	s.db.ensureMaps()
 	s.db.Meta.UpdatedAt = time.Now().UTC()
 	mainData, err := marshalIndentNoEscapeHTML(mainFileData{
-		Meta:      s.db.Meta,
-		SyncState: s.db.SyncState,
+		Meta:        s.db.Meta,
+		SyncState:   s.db.SyncState,
+		APIKeyUsage: s.db.APIKeyUsage,
 	})
 	if err != nil {
 		return fmt.Errorf("encode database: %w", err)

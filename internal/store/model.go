@@ -6,7 +6,7 @@ import (
 	"github.com/Official-Husko/pkmn-tc-value/internal/domain"
 )
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 type Meta struct {
 	SchemaVersion int       `json:"schemaVersion"`
@@ -15,11 +15,12 @@ type Meta struct {
 }
 
 type DB struct {
-	Meta       Meta                              `json:"meta"`
-	SyncState  domain.SyncState                  `json:"syncState"`
-	Sets       map[string]domain.Set             `json:"sets"`
-	CardsBySet map[string]map[string]domain.Card `json:"cardsBySet"`
-	Collection map[string]domain.CollectionEntry `json:"collection"`
+	Meta        Meta                              `json:"meta"`
+	SyncState   domain.SyncState                  `json:"syncState"`
+	APIKeyUsage map[string]domain.APIKeyUsage     `json:"apiKeyUsage"`
+	Sets        map[string]domain.Set             `json:"sets"`
+	CardsBySet  map[string]map[string]domain.Card `json:"cardsBySet"`
+	Collection  map[string]domain.CollectionEntry `json:"collection"`
 }
 
 func NewDB() *DB {
@@ -32,15 +33,19 @@ func NewDB() *DB {
 		},
 		SyncState: domain.SyncState{
 			CatalogProvider: "tcgdex",
-			PriceProvider:   "pokedata",
+			PriceProvider:   "pokemonpricetracker",
 		},
-		Sets:       make(map[string]domain.Set),
-		CardsBySet: make(map[string]map[string]domain.Card),
-		Collection: make(map[string]domain.CollectionEntry),
+		APIKeyUsage: make(map[string]domain.APIKeyUsage),
+		Sets:        make(map[string]domain.Set),
+		CardsBySet:  make(map[string]map[string]domain.Card),
+		Collection:  make(map[string]domain.CollectionEntry),
 	}
 }
 
 func (db *DB) ensureMaps() {
+	if db.APIKeyUsage == nil {
+		db.APIKeyUsage = make(map[string]domain.APIKeyUsage)
+	}
 	if db.Sets == nil {
 		db.Sets = make(map[string]domain.Set)
 	}

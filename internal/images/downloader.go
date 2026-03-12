@@ -186,7 +186,6 @@ func imageURLCandidates(card domain.Card, useBackup bool) []string {
 
 	appendURL(primary)
 	appendURL(scrydexImageURL(card))
-	appendURL(pokeDataTemplateImageURL(card.SetName, card.Number))
 	appendURL(card.ImageURL)
 	return out
 }
@@ -230,15 +229,6 @@ func isJapaneseLanguage(value string) bool {
 		return true
 	}
 	return strings.Contains(normalized, "japanese")
-}
-
-func pokeDataTemplateImageURL(setName string, cardNumber string) string {
-	set := strings.TrimSpace(setName)
-	number := strings.TrimSpace(cardNumber)
-	if set == "" || number == "" {
-		return ""
-	}
-	return fmt.Sprintf("https://pokemoncardimages.pokedata.io/images/%s/%s.webp", url.QueryEscape(set), url.QueryEscape(number))
 }
 
 func convertToPNG(input []byte) ([]byte, error) {

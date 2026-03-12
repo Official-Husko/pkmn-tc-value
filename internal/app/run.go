@@ -1,8 +1,11 @@
 package app
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/Official-Husko/pkmn-tc-value/internal/bootstrap"
 	"github.com/Official-Husko/pkmn-tc-value/internal/config"
@@ -46,5 +49,29 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	container := bootstrap.New(cfg, paths, db)
+	summary, err := container.ValidateAPIKeys(ctx)
+	if err != nil {
+		return err
+	}
+	if err := db.Update(func(db *store.DB) error {
+		db.SyncState.PriceProvider = container.Pricing.Name()
+		db.SyncState.CatalogProvider = container.Catalog.Name()
+		return nil
+	}); err != nil {
+		return err
+	}
+	if summary.Usable == 0 {
+		waitForStartupExit("No usable API keys were found.\nAdd valid keys in data/config.json under \"apiKeys\" and relaunch.\n\nPress Enter to quit.")
+		return nil
+	}
 	return New(container).Run(ctx)
+}
+
+func waitForStartupExit(message string) {
+	text := strings.TrimSpace(message)
+	if text != "" {
+		fmt.Fprintln(os.Stdout, text)
+	}
+	reader := bufio.NewReader(os.Stdin)
+	_, _ = reader.ReadString('\n')
 }

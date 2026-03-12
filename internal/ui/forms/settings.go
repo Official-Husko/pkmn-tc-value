@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	imageCompatTestURL      = "https://pokemoncardimages.pokedata.io/images/Shiny+Treasure+ex/349.webp"
+	imageCompatTestURL      = "https://tcgplayer-cdn.tcgplayer.com/product/567569_in_800x800.jpg"
 	settingStartupSync      = "startup_sync"
 	settingCardRefreshTTL   = "card_refresh_ttl"
 	settingImagePreviews    = "image_previews"

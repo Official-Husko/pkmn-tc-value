@@ -17,7 +17,7 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
-const imageCompatTestURL = "https://pokemoncardimages.pokedata.io/images/Shiny+Treasure+ex/349.webp"
+const imageCompatTestURL = "https://tcgplayer-cdn.tcgplayer.com/product/567569_in_800x800.jpg"
 
 func EditSettings(cfg config.Config, renderer images.Renderer, colors bool) (config.Config, error) {
 	next := cfg

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"strings"
 	"time"
 
 	"github.com/Official-Husko/pkmn-tc-value/internal/store"
@@ -25,4 +26,21 @@ func (r *SyncStateRepo) TouchStartup(success bool, catalogProvider, priceProvide
 		}
 		return nil
 	})
+}
+
+func (r *SyncStateRepo) SetLastViewedSetID(setID string) error {
+	id := strings.TrimSpace(setID)
+	return r.store.Update(func(db *store.DB) error {
+		db.SyncState.LastViewedSetID = id
+		return nil
+	})
+}
+
+func (r *SyncStateRepo) LastViewedSetID() (string, error) {
+	var id string
+	err := r.store.Read(func(db *store.DB) error {
+		id = strings.TrimSpace(db.SyncState.LastViewedSetID)
+		return nil
+	})
+	return id, err
 }

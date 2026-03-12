@@ -6,7 +6,9 @@ type Set struct {
 	ID                   string     `json:"id"`
 	Language             string     `json:"language,omitempty"`
 	Name                 string     `json:"name"`
+	EnglishName          string     `json:"englishName,omitempty"`
 	SetCode              string     `json:"setCode,omitempty"`
+	PriceProviderSetID   string     `json:"priceProviderSetId,omitempty"`
 	PriceProviderSetName string     `json:"priceProviderSetName,omitempty"`
 	PriceProviderSetCode string     `json:"priceProviderSetCode,omitempty"`
 	Series               string     `json:"series"`
@@ -22,7 +24,9 @@ type RemoteSet struct {
 	ID                   string
 	Language             string
 	Name                 string
+	EnglishName          string
 	SetCode              string
+	PriceProviderSetID   string
 	PriceProviderSetName string
 	PriceProviderSetCode string
 	Series               string

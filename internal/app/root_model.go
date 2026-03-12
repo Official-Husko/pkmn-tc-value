@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -22,17 +23,21 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Official-Husko/pkmn-tc-value/internal/bootstrap"
 	"github.com/Official-Husko/pkmn-tc-value/internal/config"
 	"github.com/Official-Husko/pkmn-tc-value/internal/domain"
+	trackerpricing "github.com/Official-Husko/pkmn-tc-value/internal/pricing/pokemonpricetracker"
+	"github.com/Official-Husko/pkmn-tc-value/internal/store"
 	"github.com/Official-Husko/pkmn-tc-value/internal/syncer"
 	uitheme "github.com/Official-Husko/pkmn-tc-value/internal/ui/theme"
 	"github.com/Official-Husko/pkmn-tc-value/internal/ui/viewmodel"
+	"github.com/Official-Husko/pkmn-tc-value/internal/util"
 	_ "golang.org/x/image/webp"
 )
 
-const imageCompatTestURL = "https://pokemoncardimages.pokedata.io/images/Shiny+Treasure+ex/349.webp"
+const imageCompatTestURL = "https://tcgplayer-cdn.tcgplayer.com/product/567569_in_800x800.jpg"
 
 type uiMode int
 
@@ -53,6 +58,7 @@ const (
 	menuLanguage         menuKind = "language"
 	menuSet              menuKind = "set"
 	menuSettings         menuKind = "settings"
+	menuAPIKeys          menuKind = "api_keys"
 	menuSettingBool      menuKind = "setting_bool"
 	menuImageCompat      menuKind = "image_compat"
 	menuImageCompatApply menuKind = "image_compat_apply"
@@ -62,6 +68,7 @@ type inputKind string
 
 const (
 	inputCardLookup inputKind = "card_lookup"
+	inputSetJumpID  inputKind = "set_jump_id"
 	inputSettingInt inputKind = "setting_int"
 	inputSettingStr inputKind = "setting_str"
 )
@@ -83,6 +90,17 @@ type menuOption struct {
 	Label       string
 	Description string
 	Value       string
+}
+
+type mainMenuSnapshot struct {
+	SetCount          int
+	CardCount         int
+	LanguageCount     int
+	CollectionEntries int
+	CollectionCards   int
+	LastSync          string
+	CatalogProvider   string
+	PriceProvider     string
 }
 
 type startupProgressMsg struct {
@@ -184,6 +202,7 @@ type rootModel struct {
 	cardSelected   int
 
 	settingsDraft config.Config
+	mainSnapshot  mainMenuSnapshot
 
 	busyTitle  string
 	busyStatus string
@@ -375,10 +394,32 @@ func (m *rootModel) View() string {
 	default:
 		content = "Loading..."
 	}
+	content = m.fitToViewport(content)
 	if m.mode != modeCardDetail && m.container.Renderer != nil {
 		return m.container.Renderer.ClearAllString() + content
 	}
 	return content
+}
+
+func (m *rootModel) fitToViewport(content string) string {
+	lines := strings.Split(content, "\n")
+
+	if m.width > 0 {
+		maxWidth := m.width - 1
+		if maxWidth < 1 {
+			maxWidth = 1
+		}
+		for i := range lines {
+			if lipgloss.Width(lines[i]) > maxWidth {
+				lines[i] = ansi.Truncate(lines[i], maxWidth, "")
+			}
+		}
+	}
+
+	if m.height > 0 && len(lines) > m.height {
+		lines = lines[:m.height]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *rootModel) globalQuitKey(msg tea.KeyMsg) tea.Cmd {
@@ -413,7 +454,12 @@ func (m *rootModel) animationsActive() bool {
 	case modeStartupSync, modeSetSync, modeBusy:
 		return true
 	case modeMenu:
-		return m.menuKind == menuMain || m.menuTrailFrames > 0 || math.Abs(float64(m.menuCursor)-m.menuCursorVisual) > 0.01
+		switch m.menuKind {
+		case menuMain, menuLanguage, menuSet, menuSettings, menuSettingBool, menuImageCompatApply:
+			return true
+		default:
+			return m.menuTrailFrames > 0 || math.Abs(float64(m.menuCursor)-m.menuCursorVisual) > 0.01
+		}
 	case modeCardDetail:
 		return m.cardRefreshing
 	default:
@@ -425,7 +471,10 @@ func (m *rootModel) stepAnimations() {
 	m.statusPulseFrame = (m.statusPulseFrame + 1) % 24
 
 	if m.mode == modeMenu {
-		m.menuAnimFrame = (m.menuAnimFrame + 1) % 8
+		m.menuAnimFrame++
+		if m.menuAnimFrame > 100000 {
+			m.menuAnimFrame = 0
+		}
 		if m.menuTrailFrames > 0 {
 			m.menuTrailFrames--
 		}
@@ -725,7 +774,15 @@ func (m *rootModel) applyMenuFilter() {
 			m.menuFiltered = append(m.menuFiltered, idx)
 			continue
 		}
-		haystack := strings.ToLower(opt.Label + " " + opt.Description)
+		haystack := strings.ToLower(opt.Label + " " + opt.Description + " " + opt.Value)
+		if m.menuKind == menuSet {
+			if set, ok := m.findFilteredSetByID(opt.Value); ok {
+				haystack += " " + strings.ToLower(strings.TrimSpace(set.ID))
+				haystack += " " + strings.ToLower(strings.TrimSpace(set.SetCode))
+				haystack += " " + strings.ToLower(strings.TrimSpace(set.Name))
+				haystack += " " + strings.ToLower(strings.TrimSpace(set.Series))
+			}
+		}
 		if strings.Contains(haystack, query) {
 			m.menuFiltered = append(m.menuFiltered, idx)
 		}
@@ -783,6 +840,10 @@ func (m *rootModel) updateMenu(msg tea.KeyMsg) tea.Cmd {
 			m.menuFilterActive = true
 			m.menuFilter.Focus()
 		}
+	case "i":
+		if m.menuKind == menuSet {
+			m.openSetJumpInput()
+		}
 	case "up", "k":
 		m.moveMenuCursor(m.menuCursor - 1)
 	case "down", "j":
@@ -822,31 +883,34 @@ func (m *rootModel) onMenuSelect(value string) tea.Cmd {
 		m.selectedLanguage = value
 		return m.openSetMenuForLanguage(value)
 	case menuSet:
-		set, ok, err := m.container.Sets.Get(value)
-		if err != nil {
-			m.fatalErr = err
-			return tea.Quit
-		}
-		if !ok {
-			m.openMessage("Set Missing", "The selected set was not found in the local database.", nextLanguageMenu)
-			return nil
-		}
-		m.selectedSet = set
-		cached, err := m.container.SetSync.IsSetCached(set.ID)
-		if err != nil {
-			m.fatalErr = err
-			return tea.Quit
-		}
-		needsMetadataBackfill := strings.TrimSpace(set.SetCode) == "" ||
-			strings.TrimSpace(set.PriceProviderSetName) == "" ||
-			strings.TrimSpace(set.PriceProviderSetCode) == ""
-		if cached && !needsMetadataBackfill {
-			m.openCardLookupInput()
-			return nil
-		}
-		return m.startSetSyncCmd()
+		return m.openSetByID(value)
 	case menuSettings:
 		return m.onSettingsMenuSelect(value)
+	case menuAPIKeys:
+		switch {
+		case value == "api_add":
+			m.openTextSetting("api_add_key", "Add API Key", "Paste a PokemonPriceTracker API key.", "", false)
+			return nil
+		case value == "api_back":
+			m.openSettingsMenu()
+			return nil
+		case strings.HasPrefix(value, "api_remove:"):
+			indexRaw := strings.TrimPrefix(value, "api_remove:")
+			index, err := strconv.Atoi(indexRaw)
+			if err != nil {
+				m.openMessage("API Keys", "Invalid API key index.", nextSettingsMenu)
+				return nil
+			}
+			if index < 0 || index >= len(m.settingsDraft.APIKeys) {
+				m.openMessage("API Keys", "API key index out of range.", nextSettingsMenu)
+				return nil
+			}
+			next := append([]string{}, m.settingsDraft.APIKeys[:index]...)
+			next = append(next, m.settingsDraft.APIKeys[index+1:]...)
+			m.settingsDraft.APIKeys = next
+			m.openAPIKeysMenu()
+			return nil
+		}
 	case menuSettingBool:
 		m.applyBoolSetting(m.menuSettingKey, value == "true")
 		m.openSettingsMenu()
@@ -927,6 +991,8 @@ func (m *rootModel) onInputSubmit() tea.Cmd {
 			return nil
 		}
 		return m.openCardDetail(card)
+	case inputSetJumpID:
+		return m.openSetByID(value)
 	case inputSettingInt:
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
@@ -946,6 +1012,9 @@ func (m *rootModel) onInputSubmit() tea.Cmd {
 			return nil
 		}
 		m.applyTextSetting(m.inputSettingKey, value)
+		if m.inputSettingKey == "api_add_key" {
+			return nil
+		}
 		m.openSettingsMenu()
 		return nil
 	}
@@ -961,6 +1030,7 @@ func (m *rootModel) updateMessage(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *rootModel) openMainMenu() tea.Cmd {
+	m.refreshMainMenuSnapshot()
 	m.setMenu(
 		menuMain,
 		"Pokemon Card Value",
@@ -976,6 +1046,49 @@ func (m *rootModel) openMainMenu() tea.Cmd {
 	)
 	m.menuAnimFrame = 0
 	return nil
+}
+
+func (m *rootModel) refreshMainMenuSnapshot() {
+	snapshot := mainMenuSnapshot{
+		LastSync: "never",
+	}
+
+	err := m.container.Store.Read(func(db *store.DB) error {
+		snapshot.SetCount = len(db.Sets)
+		languages := make(map[string]struct{}, len(db.Sets))
+		for _, set := range db.Sets {
+			if lang := strings.TrimSpace(set.Language); lang != "" {
+				languages[strings.ToLower(lang)] = struct{}{}
+			}
+		}
+		snapshot.LanguageCount = len(languages)
+
+		for _, cards := range db.CardsBySet {
+			snapshot.CardCount += len(cards)
+		}
+
+		snapshot.CollectionEntries = len(db.Collection)
+		for _, entry := range db.Collection {
+			snapshot.CollectionCards += entry.Quantity
+		}
+
+		if db.SyncState.LastSuccessfulStartupSyncAt != nil {
+			snapshot.LastSync = util.HumanizeAge(db.SyncState.LastSuccessfulStartupSyncAt)
+		}
+		snapshot.CatalogProvider = strings.TrimSpace(db.SyncState.CatalogProvider)
+		snapshot.PriceProvider = strings.TrimSpace(db.SyncState.PriceProvider)
+		return nil
+	})
+	if err != nil {
+		snapshot.LastSync = "unknown"
+	}
+	if snapshot.CatalogProvider == "" {
+		snapshot.CatalogProvider = "tcgdex"
+	}
+	if snapshot.PriceProvider == "" {
+		snapshot.PriceProvider = "pokemonpricetracker"
+	}
+	m.mainSnapshot = snapshot
 }
 
 func (m *rootModel) openLanguageMenu() tea.Cmd {
@@ -1052,6 +1165,20 @@ func (m *rootModel) openSetMenuForLanguage(language string) tea.Cmd {
 		return nil
 	}
 
+	if m.container.Config.LastViewedSetOnTop {
+		if lastViewedSetID, err := m.container.SyncState.LastViewedSetID(); err == nil && lastViewedSetID != "" {
+			for idx, set := range filtered {
+				if strings.TrimSpace(set.ID) == lastViewedSetID {
+					if idx > 0 {
+						filtered = append([]domain.Set{set}, append(filtered[:idx], filtered[idx+1:]...)...)
+					}
+					break
+				}
+			}
+		}
+	}
+	m.filteredSets = filtered
+
 	options := make([]menuOption, 0, len(filtered))
 	for _, set := range filtered {
 		options = append(options, menuOption{
@@ -1070,6 +1197,60 @@ func (m *rootModel) openSetMenuForLanguage(language string) tea.Cmd {
 		nextLanguageMenu,
 	)
 	return nil
+}
+
+func (m *rootModel) openSetJumpInput() {
+	m.setInput(
+		inputSetJumpID,
+		"Open set by ID or code",
+		"Enter exact set ID/code (example: sv4a, swsh3).",
+		"",
+		nextSetMenu,
+	)
+}
+
+func (m *rootModel) openSetByID(raw string) tea.Cmd {
+	id := strings.TrimSpace(raw)
+	if id == "" {
+		m.openMessage("Set Missing", "Please enter a set ID or code.", nextSetMenu)
+		return nil
+	}
+
+	set, ok, err := m.container.Sets.Get(id)
+	if err != nil {
+		m.fatalErr = err
+		return tea.Quit
+	}
+	if !ok {
+		target := strings.ToLower(id)
+		for _, candidate := range m.filteredSets {
+			if strings.ToLower(strings.TrimSpace(candidate.ID)) == target || strings.ToLower(strings.TrimSpace(candidate.SetCode)) == target {
+				set = candidate
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		m.openMessage("Set Missing", fmt.Sprintf("No set found for %q in %s.", id, m.selectedLanguage), nextSetMenu)
+		return nil
+	}
+
+	m.selectedSet = set
+	_ = m.container.SyncState.SetLastViewedSetID(set.ID)
+	cached, err := m.container.SetSync.IsSetCached(set.ID)
+	if err != nil {
+		m.fatalErr = err
+		return tea.Quit
+	}
+	needsMetadataBackfill := strings.TrimSpace(set.SetCode) == "" ||
+		strings.TrimSpace(set.PriceProviderSetID) == "" ||
+		strings.TrimSpace(set.PriceProviderSetName) == ""
+	if cached && !needsMetadataBackfill {
+		m.openCardLookupInput()
+		return nil
+	}
+	return m.startSetSyncCmd()
 }
 
 func (m *rootModel) openCardLookupInput() {
@@ -1180,11 +1361,17 @@ func (m *rootModel) loadCardImageWidget() {
 }
 
 func (m *rootModel) openSettingsMenu() {
+	keySummary := trackerpricing.ValidationSummary{}
+	if m.container != nil && m.container.KeyRing != nil {
+		keySummary = m.container.KeyRing.Summary()
+	}
 	m.setMenu(
 		menuSettings,
 		"Settings",
 		"Select one option to edit.",
 		[]menuOption{
+			{Label: fmt.Sprintf("API keys: %d configured / %d usable", len(m.settingsDraft.APIKeys), keySummary.Usable), Value: "api_keys"},
+			{Label: fmt.Sprintf("API key daily limit: %d", m.settingsDraft.APIKeyDailyLimit), Value: "api_key_daily_limit"},
 			{Label: "Debug logging: " + onOff(m.settingsDraft.Debug), Value: "debug"},
 			{Label: fmt.Sprintf("Card refresh TTL: %d hours", m.settingsDraft.CardRefreshTTLHours), Value: "card_refresh_ttl"},
 			{Label: "Image previews: " + onOff(m.settingsDraft.ImagePreviewsEnabled), Value: "image_previews"},
@@ -1199,6 +1386,7 @@ func (m *rootModel) openSettingsMenu() {
 			{Label: fmt.Sprintf("Request delay: %d ms", m.settingsDraft.RequestDelayMs), Value: "request_delay"},
 			{Label: fmt.Sprintf("Rate-limit cooldown: %d sec", m.settingsDraft.RateLimitCooldownSeconds), Value: "rate_limit_cooldown"},
 			{Label: "Save searched cards by default: " + onOff(m.settingsDraft.SaveSearchedCardsDefault), Value: "save_searched"},
+			{Label: "Last viewed set on top: " + onOff(m.settingsDraft.LastViewedSetOnTop), Value: "last_viewed_set_top"},
 			{Label: "HTTP user agent: " + m.settingsDraft.UserAgent, Value: "user_agent"},
 			{Label: "Save and Back", Value: "save_back"},
 			{Label: "Back without saving", Value: "back_no_save"},
@@ -1211,6 +1399,12 @@ func (m *rootModel) openSettingsMenu() {
 
 func (m *rootModel) onSettingsMenuSelect(value string) tea.Cmd {
 	switch value {
+	case "api_keys":
+		m.openAPIKeysMenu()
+		return nil
+	case "api_key_daily_limit":
+		m.openIntSetting("api_key_daily_limit", "API Key Daily Limit", "Allowed range: 1 to 100000 requests per key per UTC day.", m.settingsDraft.APIKeyDailyLimit, 1, 100000)
+		return nil
 	case "debug":
 		m.openBoolSetting("debug", "Debug Logging", "Write detailed diagnostics to debug.log in the project folder.", m.settingsDraft.Debug)
 		return nil
@@ -1238,7 +1432,7 @@ func (m *rootModel) onSettingsMenuSelect(value string) tea.Cmd {
 		m.openIntSetting("image_download_workers", "Image Download Workers", "Parallel workers for set image downloads. Allowed range: 1 to 32.", m.settingsDraft.ImageDownloadWorkers, 1, 32)
 		return nil
 	case "backup_image_source":
-		m.openBoolSetting("backup_image_source", "Backup Image Source", "When enabled, PokeData and JSON image URLs are used if Scrydex fails.", m.settingsDraft.BackupImageSource)
+		m.openBoolSetting("backup_image_source", "Backup Image Source", "When enabled, fallback image URLs (Scrydex and provider image URL) are used if the primary source fails.", m.settingsDraft.BackupImageSource)
 		return nil
 	case "sync_card_details":
 		m.openBoolSetting("sync_card_details", "Sync Card Details (prices)", "Fetch per-card detail stats and prices during set sync.", m.settingsDraft.SyncCardDetails)
@@ -1255,6 +1449,9 @@ func (m *rootModel) onSettingsMenuSelect(value string) tea.Cmd {
 	case "save_searched":
 		m.openBoolSetting("save_searched", "Save Searched Cards by Default", "When true, looked-up cards are auto-saved and the Add button is hidden.", m.settingsDraft.SaveSearchedCardsDefault)
 		return nil
+	case "last_viewed_set_top":
+		m.openBoolSetting("last_viewed_set_top", "Last Viewed Set On Top", "When enabled, the most recently opened set is pinned to the top of set selection.", m.settingsDraft.LastViewedSetOnTop)
+		return nil
 	case "user_agent":
 		m.openTextSetting("user_agent", "HTTP User Agent", "User-Agent header sent to remote requests.", m.settingsDraft.UserAgent, false)
 		return nil
@@ -1263,7 +1460,7 @@ func (m *rootModel) onSettingsMenuSelect(value string) tea.Cmd {
 			m.openMessage("Invalid Settings", err.Error(), nextSettingsMenu)
 			return nil
 		}
-		if m.settingsDraft == m.container.Config {
+		if reflect.DeepEqual(m.settingsDraft, m.container.Config) {
 			return m.openMainMenu()
 		}
 		if err := config.Save(m.container.Paths.ConfigFile, m.settingsDraft); err != nil {
@@ -1271,12 +1468,68 @@ func (m *rootModel) onSettingsMenuSelect(value string) tea.Cmd {
 			return nil
 		}
 		m.container = bootstrap.New(m.settingsDraft, m.container.Paths, m.container.Store)
+		if summary, err := m.container.ValidateAPIKeys(m.ctx); err != nil {
+			m.openMessage("API Key Validation", err.Error(), nextMainMenu)
+			return nil
+		} else if summary.Usable == 0 {
+			m.openMessage("API Key Validation", "No usable API keys are configured. The app will not be able to refresh prices.", nextMainMenu)
+			return nil
+		}
 		m.openMessage("Settings Saved", "The tool configuration was updated.", nextMainMenu)
 		return nil
 	case "back_no_save":
 		return m.openMainMenu()
 	}
 	return nil
+}
+
+func (m *rootModel) openAPIKeysMenu() {
+	statusByMasked := make(map[string]string)
+	statuses := []trackerpricing.KeyStatus{}
+	if m.container != nil && m.container.Tracker != nil {
+		statuses = m.container.Tracker.KeyStatuses()
+	}
+	for _, status := range statuses {
+		state := "unusable"
+		if status.Usable {
+			state = "usable"
+		}
+		statusByMasked[status.Masked] = state + " · " + status.Reason
+	}
+
+	options := make([]menuOption, 0, len(m.settingsDraft.APIKeys)+2)
+	options = append(options, menuOption{
+		Label:       "Add API key",
+		Description: "Add a new PokemonPriceTracker API key",
+		Value:       "api_add",
+	})
+	for idx, key := range m.settingsDraft.APIKeys {
+		masked := maskAPIKeyDisplay(key)
+		description := "remove this key"
+		if state, ok := statusByMasked[masked]; ok {
+			description = state
+		}
+		options = append(options, menuOption{
+			Label:       fmt.Sprintf("Remove %s", masked),
+			Description: description,
+			Value:       fmt.Sprintf("api_remove:%d", idx),
+		})
+	}
+	options = append(options, menuOption{
+		Label:       "Back",
+		Description: "Return to settings",
+		Value:       "api_back",
+	})
+
+	m.setMenu(
+		menuAPIKeys,
+		"API Keys",
+		"Manage API keys used for PokemonPriceTracker requests.",
+		options,
+		false,
+		14,
+		nextSettingsMenu,
+	)
 }
 
 func (m *rootModel) openBoolSetting(key, title, description string, current bool) {
@@ -1326,11 +1579,15 @@ func (m *rootModel) applyBoolSetting(key string, value bool) {
 		m.settingsDraft.ColorsEnabled = value
 	case "save_searched":
 		m.settingsDraft.SaveSearchedCardsDefault = value
+	case "last_viewed_set_top":
+		m.settingsDraft.LastViewedSetOnTop = value
 	}
 }
 
 func (m *rootModel) applyIntSetting(key string, value int) {
 	switch key {
+	case "api_key_daily_limit":
+		m.settingsDraft.APIKeyDailyLimit = value
 	case "card_refresh_ttl":
 		m.settingsDraft.CardRefreshTTLHours = value
 	case "request_delay":
@@ -1344,6 +1601,18 @@ func (m *rootModel) applyIntSetting(key string, value int) {
 
 func (m *rootModel) applyTextSetting(key string, value string) {
 	switch key {
+	case "api_add_key":
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return
+		}
+		for _, existing := range m.settingsDraft.APIKeys {
+			if strings.TrimSpace(existing) == trimmed {
+				return
+			}
+		}
+		m.settingsDraft.APIKeys = append(m.settingsDraft.APIKeys, trimmed)
+		m.openAPIKeysMenu()
 	case "user_agent":
 		m.settingsDraft.UserAgent = value
 	}
@@ -1351,114 +1620,454 @@ func (m *rootModel) applyTextSetting(key string, value string) {
 
 func (m *rootModel) viewMenu() string {
 	styles := m.styles()
+	switch m.menuKind {
+	case menuMain:
+		return m.viewMainSelectionScreen(styles)
+	case menuLanguage:
+		return m.viewLanguageSelectionScreen(styles)
+	case menuSet:
+		return m.viewSetSelectionScreen(styles)
+	case menuSettings:
+		return m.viewSettingsSelectionScreen(styles)
+	case menuAPIKeys:
+		return m.viewAPIKeysSelectionScreen(styles)
+	case menuSettingBool, menuImageCompatApply:
+		return m.viewChoiceSelectionScreen(styles)
+	default:
+		return m.viewGenericMenuScreen(styles)
+	}
+}
+
+func (m *rootModel) viewGenericMenuScreen(styles uitheme.Styles) string {
 	lines := make([]string, 0, 24)
 	section := "Menu"
 	subtitle := m.menuTitle
-
-	if m.menuKind == menuMain {
-		section = "Main Menu"
-		lines = append(lines, m.viewMainMenuHero(styles), "")
-	} else if strings.TrimSpace(m.menuDescription) != "" {
+	if strings.TrimSpace(m.menuDescription) != "" {
 		lines = append(lines, styles.Muted.Render(m.menuDescription), "")
 	}
 
 	if m.menuFilterEnabled {
-		filterView := m.menuFilter.View()
-		if m.menuFilterActive {
-			filterView = styles.Label.Render(filterView)
-		} else {
-			filterView = styles.Muted.Render(filterView)
-		}
-		countLine := styles.Muted.Render(fmt.Sprintf("%d options", len(m.menuFiltered)))
-		lines = append(lines, filterView, countLine, "")
+		lines = append(lines, m.renderFilterSummaryLine(styles), "")
 	}
 
-	if len(m.menuFiltered) == 0 {
-		lines = append(lines, styles.Muted.Render("No matching options."))
-	} else {
-		start := 0
-		if m.menuCursor >= m.menuMaxRows {
-			start = m.menuCursor - m.menuMaxRows + 1
-		}
-		end := start + m.menuMaxRows
-		if end > len(m.menuFiltered) {
-			end = len(m.menuFiltered)
-		}
-		for i := start; i < end; i++ {
-			option := m.menuOptions[m.menuFiltered[i]]
-			label := option.Label
-			if strings.TrimSpace(option.Description) != "" {
-				label += " " + styles.Muted.Render("· "+option.Description)
-			}
-			if i == m.menuPrevCursor && i != m.menuCursor && m.menuTrailFrames > 0 {
-				trailPrefixes := []string{"  ", "· ", "∙ ", "◦ ", "• "}
-				trailPrefix := trailPrefixes[clampInt(m.menuTrailFrames, 0, len(trailPrefixes)-1)]
-				lines = append(lines, styles.Muted.Render(trailPrefix+label))
-				continue
-			}
-			prefix := "  "
-			if i == m.menuCursor {
-				traveling := math.Abs(float64(m.menuCursor)-m.menuCursorVisual) > 0.10
-				if m.menuKind == menuMain {
-					frames := []string{"▸", "▹", "▸", "▹"}
-					prefix = frames[m.menuAnimFrame%len(frames)] + " "
-					if traveling {
-						prefix = "▹ "
-					}
-				} else {
-					prefix = "▸ "
-					if traveling {
-						prefix = "▹ "
-					}
-				}
-			}
-			if i == m.menuCursor {
-				lines = append(lines, styles.Active.Render(prefix+label))
-			} else {
-				lines = append(lines, styles.Action.Render(prefix+label))
-			}
-		}
-		if len(m.menuFiltered) > m.menuMaxRows {
-			lines = append(lines, "", styles.Muted.Render(fmt.Sprintf("Showing %d-%d of %d", start+1, end, len(m.menuFiltered))))
-		}
+	maxVisible, compact := m.menuViewportRows(11, len(lines), m.menuFilterEnabled)
+	actionRows, start, end := m.renderMenuOptionCards(styles, maxVisible, compact)
+	lines = append(lines, actionRows...)
+	if len(m.menuFiltered) > maxVisible {
+		lines = append(lines, "", styles.Muted.Render(fmt.Sprintf("Showing %d-%d of %d", start+1, end, len(m.menuFiltered))))
 	}
 
 	hints := "Enter: Select • Esc: Back • ↑/↓: Move"
 	if m.menuFilterEnabled {
 		hints += " • /: Filter"
 	}
-	if m.menuKind == menuMain {
-		hints += " • Ctrl+C: Quit"
-	}
-
 	lines = append(lines, "", styles.Muted.Render(hints))
 	content := strings.Join(lines, "\n")
 	return m.renderScreenShell(styles, section, subtitle, content)
 }
 
-func (m *rootModel) viewMainMenuHero(styles uitheme.Styles) string {
-	frames := []string{"◜", "◠", "◝", "◞", "◡", "◟"}
-	frame := frames[m.menuAnimFrame%len(frames)]
-	badge := styles.Active.Copy().Padding(0, 1).Render(frame + " READY")
-	title := styles.Title.Copy().Bold(true).Render("PKMN TCG VALUE")
-	version := styles.Muted.Render("v" + m.version)
-	subtitle := styles.Muted.Render(m.menuDescription)
+func (m *rootModel) viewLanguageSelectionScreen(styles uitheme.Styles) string {
+	selectedLanguage := ""
+	setsInSelectedLanguage := 0
+	if option, ok := m.currentMenuOption(); ok {
+		selectedLanguage = option.Value
+		want := normalizeLanguage(selectedLanguage)
+		for _, set := range m.allSets {
+			if normalizeLanguage(set.Language) == want {
+				setsInSelectedLanguage++
+			}
+		}
+	}
 
-	head := lipgloss.JoinHorizontal(lipgloss.Center, title, "  ", version)
-	content := lipgloss.JoinVertical(
-		lipgloss.Left,
-		badge,
-		"",
-		head,
-		subtitle,
-	)
+	summaryLines := []string{
+		styles.Label.Render("Language Catalog"),
+		fmt.Sprintf("Available languages: %s", styles.Value.Render(strconv.Itoa(len(m.menuOptions)))),
+		fmt.Sprintf("Total sets in local DB: %s", styles.Value.Render(strconv.Itoa(len(m.allSets)))),
+	}
+	if selectedLanguage != "" {
+		summaryLines = append(summaryLines,
+			fmt.Sprintf("Selected language: %s", styles.Value.Render(selectedLanguage)),
+			fmt.Sprintf("Sets in selection: %s", styles.Value.Render(strconv.Itoa(setsInSelectedLanguage))),
+		)
+	}
 
-	border := lipgloss.RoundedBorder()
+	hints := "Enter: Select  •  ↑/↓: Move  •  /: Filter  •  Esc/Q: Back"
+	return m.renderSelectionMenuScreen(styles, "Language", "Choose Card Language", summaryLines, "Languages", hints)
+}
+
+func (m *rootModel) viewSetSelectionScreen(styles uitheme.Styles) string {
+	selectedSet, selectedSetFound := m.currentSelectedSet()
+	summaryWidth := m.clampedContentWidth(18, 80, 20)
+	summaryLines := []string{
+		styles.Label.Render("Set Browser"),
+		fmt.Sprintf("Language: %s", styles.Value.Render(m.selectedLanguage)),
+		fmt.Sprintf("Matching sets: %s", styles.Value.Render(strconv.Itoa(len(m.filteredSets)))),
+	}
+	if selectedSetFound {
+		nameWidth := summaryWidth - lipgloss.Width("Name: ") - 2
+		if nameWidth < 8 {
+			nameWidth = 8
+		}
+		nameValue := truncateToWidth(selectedSet.Name, nameWidth)
+		summaryLines = append(summaryLines,
+			"",
+			styles.Label.Render("Selected Set"),
+			fmt.Sprintf("Name: %s", styles.Value.Render(nameValue)),
+			fmt.Sprintf("Release: %s", styles.Value.Render(selectedSet.ReleaseDate)),
+			fmt.Sprintf("Cards cached: %s", styles.Value.Render(strconv.Itoa(selectedSet.Total))),
+		)
+	}
+
+	hints := "Enter: Open Set  •  I: Jump by ID  •  ↑/↓: Move  •  /: Filter  •  Esc/Q: Back"
+	return m.renderSelectionMenuScreen(styles, "Set", "Choose a Set", summaryLines, "Sets", hints)
+}
+
+func (m *rootModel) viewSettingsSelectionScreen(styles uitheme.Styles) string {
+	changed := settingsDiffCount(m.settingsDraft, m.container.Config)
+	statusValue := "Clean"
+	statusStyle := styles.Success
+	if changed > 0 {
+		statusValue = fmt.Sprintf("%d unsaved change(s)", changed)
+		statusStyle = styles.Warn
+	}
+
+	summaryLines := []string{
+		styles.Label.Render("Settings Draft"),
+		"Status: " + statusStyle.Render(statusValue),
+		fmt.Sprintf("Image previews: %s", styles.Value.Render(onOff(m.settingsDraft.ImagePreviewsEnabled))),
+		fmt.Sprintf("Image caching: %s", styles.Value.Render(onOff(m.settingsDraft.ImageCaching))),
+		fmt.Sprintf("Startup metadata prefetch: %s", styles.Value.Render(onOff(m.settingsDraft.PrefetchCardMetadataOnStartup))),
+		fmt.Sprintf("Startup image prefetch: %s", styles.Value.Render(onOff(m.settingsDraft.DownloadAllImagesOnStartup))),
+		fmt.Sprintf("Image workers: %s", styles.Value.Render(strconv.Itoa(m.settingsDraft.ImageDownloadWorkers))),
+		fmt.Sprintf("Request delay: %s", styles.Value.Render(fmt.Sprintf("%d ms", m.settingsDraft.RequestDelayMs))),
+		fmt.Sprintf("Last viewed set on top: %s", styles.Value.Render(onOff(m.settingsDraft.LastViewedSetOnTop))),
+	}
+
+	hints := "Enter: Edit/Apply  •  ↑/↓: Move  •  Esc/Q: Back"
+	return m.renderSelectionMenuScreen(styles, "Settings", "Tool Configuration", summaryLines, "Settings Actions", hints)
+}
+
+func (m *rootModel) viewAPIKeysSelectionScreen(styles uitheme.Styles) string {
+	statuses := []trackerpricing.KeyStatus{}
+	if m.container != nil && m.container.Tracker != nil {
+		statuses = m.container.Tracker.KeyStatuses()
+	}
+	usable := 0
+	for _, status := range statuses {
+		if status.Usable {
+			usable++
+		}
+	}
+
+	summaryLines := []string{
+		styles.Label.Render("API Key Manager"),
+		fmt.Sprintf("Configured keys: %s", styles.Value.Render(strconv.Itoa(len(m.settingsDraft.APIKeys)))),
+		fmt.Sprintf("Usable keys: %s", styles.Value.Render(strconv.Itoa(usable))),
+	}
+	if len(statuses) > 0 {
+		limit := statuses[0].DailyLimit
+		summaryLines = append(summaryLines, fmt.Sprintf("Daily cap per key: %s", styles.Value.Render(strconv.Itoa(limit))))
+	}
+
+	hints := "Enter: Select  •  ↑/↓: Move  •  Esc/Q: Back"
+	return m.renderSelectionMenuScreen(styles, "Settings", "API Keys", summaryLines, "Key Actions", hints)
+}
+
+func (m *rootModel) viewChoiceSelectionScreen(styles uitheme.Styles) string {
+	summaryLines := []string{
+		styles.Label.Render(m.menuTitle),
+		styles.Muted.Render(m.menuDescription),
+	}
+	hints := "Enter: Select  •  ↑/↓: Move  •  Esc/Q: Back"
+	return m.renderSelectionMenuScreen(styles, "Settings", m.menuTitle, summaryLines, "Choices", hints)
+}
+
+func (m *rootModel) renderSelectionMenuScreen(styles uitheme.Styles, section string, subtitle string, summaryLines []string, actionTitle string, hints string) string {
+	lines := make([]string, 0, len(summaryLines)+18)
+	lines = append(lines, summaryLines...)
+	if m.menuFilterEnabled {
+		lines = append(lines, "", styles.Label.Render("Filter:")+" "+m.renderFilterSummaryLine(styles))
+	}
+
+	maxVisible, compact := m.menuViewportRows(10, len(lines), m.menuFilterEnabled)
+	actionRows, start, end := m.renderMenuOptionCards(styles, maxVisible, compact)
+	lines = append(lines, "", styles.Label.Render(actionTitle)+" "+m.statusPulse(styles, "info"))
+	if len(m.menuFiltered) > 0 {
+		lines = append(lines, styles.Muted.Render(fmt.Sprintf("Showing %d-%d of %d", start+1, end, len(m.menuFiltered))))
+	}
+	lines = append(lines, m.renderRowsContainer(actionRows, maxVisible))
+	if m.width > 0 && lipgloss.Width(hints) > m.width-20 {
+		hints = "Enter: Select  •  Esc/Q: Back"
+	}
+	lines = append(lines, "", styles.Muted.Render(hints))
+
+	lines = m.clampLines(lines, 14)
+	return m.renderScreenShell(styles, section, subtitle, strings.Join(lines, "\n"))
+}
+
+func (m *rootModel) renderFilterSummaryLine(styles uitheme.Styles) string {
+	filterView := m.menuFilter.View()
+	if m.menuFilterActive {
+		filterView = styles.Label.Render(filterView)
+	} else {
+		filterView = styles.Muted.Render(filterView)
+	}
+	return filterView + " " + styles.Muted.Render(fmt.Sprintf("(%d)", len(m.menuFiltered)))
+}
+
+func (m *rootModel) renderMenuFilterPanel(styles uitheme.Styles, width int) string {
+	filterLines := []string{
+		styles.Label.Render("Filter"),
+		m.renderFilterSummaryLine(styles),
+	}
 	return styles.Card.Copy().
-		Border(border).
-		BorderForeground(uitheme.Gold).
-		Padding(1, 2).
-		Render(content)
+		Width(width).
+		Padding(0, 1).
+		BorderForeground(uitheme.Slate).
+		Render(strings.Join(filterLines, "\n"))
+}
+
+func (m *rootModel) renderMenuOptionCards(styles uitheme.Styles, maxRows int, compact bool) ([]string, int, int) {
+	if len(m.menuFiltered) == 0 {
+		return []string{styles.Muted.Render("No matching options.")}, 0, 0
+	}
+	if maxRows < 1 {
+		maxRows = 1
+	}
+
+	start := 0
+	if m.menuCursor >= maxRows {
+		start = m.menuCursor - maxRows + 1
+	}
+	end := start + maxRows
+	if end > len(m.menuFiltered) {
+		end = len(m.menuFiltered)
+	}
+
+	rows := make([]string, 0, end-start)
+	normalRowStyle := styles.Value
+	selectedRowStyle := styles.Value.Copy().Bold(true)
+	if m.container.Config.ColorsEnabled {
+		normalRowStyle = normalRowStyle.Foreground(uitheme.Cream)
+		selectedRowStyle = selectedRowStyle.Foreground(uitheme.Ink).Background(uitheme.Gold)
+	}
+	setReleaseStyle := styles.Muted.Copy().Foreground(lipgloss.Color("#4B5563"))
+	setIDStyle := styles.Label.Copy().Foreground(uitheme.Blue)
+	setNameStyle := styles.Value.Copy().Bold(true)
+	setCardsStyle := styles.Success.Copy().Foreground(uitheme.Gold)
+	setRowWidth := m.selectionRowWidth()
+	for i := start; i < end; i++ {
+		option := m.menuOptions[m.menuFiltered[i]]
+		selected := i == m.menuCursor
+
+		prefix := "  "
+		if selected {
+			frames := []string{"▸", "▹", "▸", "▹"}
+			prefix = frames[m.menuAnimFrame%len(frames)] + " "
+		}
+		titleLine := normalRowStyle.Render(prefix + option.Label)
+		descLine := styles.Muted.Render(option.Description)
+		if selected {
+			titleLine = selectedRowStyle.Render(prefix + option.Label)
+			descLine = styles.Value.Render(option.Description)
+		}
+
+		if m.menuKind == menuSet && strings.TrimSpace(option.Description) != "" {
+			setItem, ok := m.findFilteredSetByID(option.Value)
+			if !ok {
+				setItem = domain.Set{Name: option.Label, ReleaseDate: option.Description}
+			}
+			setID := strings.TrimSpace(setItem.SetCode)
+			if setID == "" {
+				setID = strings.TrimSpace(setItem.ID)
+			}
+			if setID == "" {
+				setID = "?"
+			}
+			setName := strings.TrimSpace(setItem.Name)
+			if setName == "" {
+				setName = option.Label
+			}
+			cardsText := fmt.Sprintf("%d cards", setItem.Total)
+			if setItem.Total <= 0 {
+				cardsText = "cards ?"
+			}
+			datePlain := strings.TrimSpace(option.Description)
+			includeDate := true
+			includeCards := true
+			minNameWidth := 6
+
+			computeFixed := func(withCards bool, withDate bool) int {
+				parts := lipgloss.Width(prefix) + lipgloss.Width("[]") + lipgloss.Width(setID)
+				separators := 0
+				if withCards || withDate {
+					separators++
+				}
+				if withCards && withDate {
+					separators++
+				}
+				parts += separators * lipgloss.Width(" · ")
+				if withCards {
+					parts += lipgloss.Width(cardsText)
+				}
+				if withDate {
+					parts += lipgloss.Width(datePlain)
+				}
+				return parts
+			}
+
+			fixedWidth := computeFixed(includeCards, includeDate)
+			nameMaxWidth := setRowWidth - fixedWidth
+			if nameMaxWidth < minNameWidth && includeDate {
+				includeDate = false
+				fixedWidth = computeFixed(includeCards, includeDate)
+				nameMaxWidth = setRowWidth - fixedWidth
+			}
+			if nameMaxWidth < minNameWidth && includeCards {
+				includeCards = false
+				fixedWidth = computeFixed(includeCards, includeDate)
+				nameMaxWidth = setRowWidth - fixedWidth
+			}
+			if nameMaxWidth < 1 {
+				nameMaxWidth = 1
+			}
+			namePlain := truncateToWidth(setName, nameMaxWidth)
+
+			idPlain := "[" + setID + "]"
+			idStyled := setIDStyle.Render(idPlain)
+			nameStyled := setNameStyle.Render(namePlain)
+
+			parts := []string{idStyled, nameStyled}
+			partsPlain := []string{idPlain, namePlain}
+			if includeCards {
+				parts = append(parts, setCardsStyle.Render(cardsText))
+				partsPlain = append(partsPlain, cardsText)
+			}
+			if includeDate {
+				parts = append(parts, setReleaseStyle.Render(datePlain))
+				partsPlain = append(partsPlain, datePlain)
+			}
+			rowText := prefix + strings.Join(parts, " · ")
+			rowPlain := prefix + strings.Join(partsPlain, " · ")
+			if lipgloss.Width(rowPlain) > setRowWidth {
+				overflow := lipgloss.Width(rowPlain) - setRowWidth
+				if overflow > 0 {
+					namePlain = truncateToWidth(namePlain, lipgloss.Width(namePlain)-overflow)
+					if namePlain == "" {
+						namePlain = "…"
+					}
+					parts[1] = setNameStyle.Render(namePlain)
+					rowText = prefix + strings.Join(parts, " · ")
+				}
+			}
+			if lipgloss.Width(rowText) > setRowWidth {
+				rowText = ansi.Truncate(rowText, setRowWidth, "")
+			}
+			if selected {
+				rows = append(rows, selectedRowStyle.Render(rowText))
+			} else {
+				rows = append(rows, normalRowStyle.Render(rowText))
+			}
+			continue
+		}
+
+		row := titleLine
+		if compact {
+			rows = append(rows, row)
+			continue
+		}
+		rows = append(rows, row)
+		if strings.TrimSpace(option.Description) != "" {
+			rows = append(rows, "   "+descLine)
+		}
+	}
+	return rows, start, end
+}
+
+func (m *rootModel) renderRowsContainer(rows []string, maxVisible int) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	if maxVisible < 1 {
+		maxVisible = 1
+	}
+	body := strings.Join(rows, "\n")
+	width := m.selectionRowWidth()
+	return lipgloss.NewStyle().
+		MaxWidth(width).
+		Width(width).
+		Height(maxVisible).
+		MaxHeight(maxVisible).
+		Render(body)
+}
+
+func (m *rootModel) currentMenuOption() (menuOption, bool) {
+	if len(m.menuFiltered) == 0 || m.menuCursor < 0 || m.menuCursor >= len(m.menuFiltered) {
+		return menuOption{}, false
+	}
+	return m.menuOptions[m.menuFiltered[m.menuCursor]], true
+}
+
+func (m *rootModel) currentSelectedSet() (domain.Set, bool) {
+	selected, ok := m.currentMenuOption()
+	if !ok {
+		return domain.Set{}, false
+	}
+	return m.findFilteredSetByID(selected.Value)
+}
+
+func (m *rootModel) findFilteredSetByID(id string) (domain.Set, bool) {
+	selectedID := strings.TrimSpace(id)
+	for _, set := range m.filteredSets {
+		if strings.TrimSpace(set.ID) == selectedID {
+			return set, true
+		}
+	}
+	return domain.Set{}, false
+}
+
+func (m *rootModel) viewMainSelectionScreen(styles uitheme.Styles) string {
+	snap := m.mainSnapshot
+	stripeWidth := m.clampedContentWidth(10, 80, 20)
+
+	summaryLines := []string{
+		styles.Title.Render("Pokemon Card Value"),
+		styles.Muted.Render(m.mainMenuStripe(stripeWidth)),
+		"",
+		styles.Label.Render("Catalog:") + " " + styles.Value.Render(fmt.Sprintf("%d sets • %d cards • %d languages", snap.SetCount, snap.CardCount, snap.LanguageCount)),
+		styles.Label.Render("Collection:") + " " + styles.Value.Render(fmt.Sprintf("%d entries • %d cards", snap.CollectionEntries, snap.CollectionCards)),
+		styles.Label.Render("Sync:") + " " + styles.Value.Render(fmt.Sprintf("%s  (%s/%s)", snap.LastSync, snap.CatalogProvider, snap.PriceProvider)),
+	}
+
+	lines := make([]string, 0, 24)
+	lines = append(lines, summaryLines...)
+	maxVisible, _ := m.menuViewportRows(10, len(summaryLines), false)
+	actionRows, _, _ := m.renderMenuOptionCards(styles, maxVisible, true)
+	lines = append(lines, "", styles.Label.Render("Actions")+" "+m.statusPulse(styles, "info"))
+	lines = append(lines, actionRows...)
+	lines = append(lines, "", styles.Muted.Render("Enter: Select  •  ↑/↓: Move  •  Esc/Q: Quit  •  Ctrl+C: Quit"))
+
+	lines = m.clampLines(lines, 14)
+	return m.renderScreenShell(styles, "Main Menu", "v"+m.version, strings.Join(lines, "\n"))
+}
+
+func (m *rootModel) mainMenuStripe(width int) string {
+	if width < 8 {
+		width = 8
+	}
+	runes := make([]rune, width)
+	for i := range runes {
+		runes[i] = '─'
+	}
+	head := m.menuAnimFrame % width
+	runes[head] = '◆'
+	if head+1 < width {
+		runes[head+1] = '─'
+	}
+	if head > 0 {
+		runes[head-1] = '·'
+	}
+	return string(runes)
 }
 
 func (m *rootModel) viewInput() string {
@@ -1614,8 +2223,15 @@ func (m *rootModel) renderScreenShell(styles uitheme.Styles, section string, sub
 	}
 	content = append(content, "", body)
 
-	panel := styles.Card.Copy().BorderForeground(uitheme.Blue).Padding(1, 2).Render(strings.Join(content, "\n"))
-	return lipgloss.NewStyle().Padding(1, 2).Render(panel)
+	panelStyle := styles.Card.Copy().BorderForeground(uitheme.Blue).Padding(1, 2)
+	if m.width > 0 {
+		panelWidth := m.width - 8
+		if panelWidth > 24 {
+			panelStyle = panelStyle.Width(panelWidth)
+		}
+	}
+	panel := panelStyle.Render(strings.Join(content, "\n"))
+	return m.fitToViewport(lipgloss.NewStyle().Padding(1, 2).Render(panel))
 }
 
 func (m *rootModel) renderCardImagePane(width int, height int) string {
@@ -1698,22 +2314,26 @@ func detailLayout(width int, height int) (left int, right int, panelHeight int) 
 		height = 40
 	}
 	contentWidth := width - 5
-	if contentWidth < 70 {
-		contentWidth = 70
+	if contentWidth < 24 {
+		contentWidth = 24
 	}
-	left = (contentWidth * 52) / 100
+	left = (contentWidth * 48) / 100
 	right = contentWidth - left - 1
-	if left < 30 {
-		left = 30
+	if left < 10 {
+		left = 10
 		right = contentWidth - left - 1
 	}
-	if right < 36 {
-		right = 36
+	if right < 10 {
+		right = 10
 		left = contentWidth - right - 1
+		if left < 10 {
+			left = contentWidth / 2
+			right = contentWidth - left - 1
+		}
 	}
 	panelHeight = height - 8
-	if panelHeight < 16 {
-		panelHeight = 16
+	if panelHeight < 8 {
+		panelHeight = 8
 	}
 	if panelHeight > 36 {
 		panelHeight = 36
@@ -1781,6 +2401,79 @@ func (m *rootModel) statusPulse(styles uitheme.Styles, kind string) string {
 	}
 }
 
+func (m *rootModel) clampedContentWidth(outerPadding int, fallback int, minSafe int) int {
+	if m.width <= 0 {
+		return fallback
+	}
+	width := m.width - outerPadding
+	if width < minSafe {
+		if width < 20 {
+			return 20
+		}
+		return width
+	}
+	return width
+}
+
+func (m *rootModel) selectionRowWidth() int {
+	if m.width <= 0 {
+		return 72
+	}
+	panelWidth := m.width - 8
+	if panelWidth < 24 {
+		panelWidth = 24
+	}
+	innerWidth := panelWidth - 6
+	if innerWidth < 16 {
+		innerWidth = 16
+	}
+	return innerWidth
+}
+
+func (m *rootModel) menuViewportRows(baseReserve int, summaryLineCount int, hasFilter bool) (int, bool) {
+	if m.height <= 0 {
+		return m.menuMaxRows, false
+	}
+	reserve := baseReserve + summaryLineCount
+	if hasFilter {
+		reserve += 3
+	}
+	available := m.height - reserve
+	if available < 4 {
+		available = 4
+	}
+
+	compact := available < 20
+	linesPerRow := 2
+	if compact {
+		linesPerRow = 1
+	}
+	rows := available / linesPerRow
+	if rows < 1 {
+		rows = 1
+	}
+	if rows > m.menuMaxRows {
+		rows = m.menuMaxRows
+	}
+	return rows, compact
+}
+
+func (m *rootModel) clampLines(lines []string, reserve int) []string {
+	if m.height <= 0 {
+		return lines
+	}
+	maxLines := m.height - reserve
+	if maxLines < 3 {
+		maxLines = 3
+	}
+	if len(lines) <= maxLines {
+		return lines
+	}
+	clamped := append([]string{}, lines[:maxLines-1]...)
+	clamped = append(clamped, "…")
+	return clamped
+}
+
 func clampInt(value int, min int, max int) int {
 	if value < min {
 		return min
@@ -1789,6 +2482,27 @@ func clampInt(value int, min int, max int) int {
 		return max
 	}
 	return value
+}
+
+func truncateToWidth(value string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	if lipgloss.Width(value) <= maxWidth {
+		return value
+	}
+	runes := []rune(value)
+	if len(runes) == 0 {
+		return value
+	}
+	for len(runes) > 0 {
+		runes = runes[:len(runes)-1]
+		candidate := string(runes) + "…"
+		if lipgloss.Width(candidate) <= maxWidth {
+			return candidate
+		}
+	}
+	return "…"
 }
 
 func renderBar(percent float64, width int) string {
@@ -1817,6 +2531,73 @@ func onOff(v bool) string {
 		return "On"
 	}
 	return "Off"
+}
+
+func settingsDiffCount(a config.Config, b config.Config) int {
+	changed := 0
+	if a.StartupSyncEnabled != b.StartupSyncEnabled {
+		changed++
+	}
+	if !reflect.DeepEqual(a.APIKeys, b.APIKeys) {
+		changed++
+	}
+	if a.APIKeyDailyLimit != b.APIKeyDailyLimit {
+		changed++
+	}
+	if a.Debug != b.Debug {
+		changed++
+	}
+	if a.CardRefreshTTLHours != b.CardRefreshTTLHours {
+		changed++
+	}
+	if a.ImagePreviewsEnabled != b.ImagePreviewsEnabled {
+		changed++
+	}
+	if a.ImageCaching != b.ImageCaching {
+		changed++
+	}
+	if a.PrefetchCardMetadataOnStartup != b.PrefetchCardMetadataOnStartup {
+		changed++
+	}
+	if a.DownloadAllImagesOnStartup != b.DownloadAllImagesOnStartup {
+		changed++
+	}
+	if a.ImageDownloadWorkers != b.ImageDownloadWorkers {
+		changed++
+	}
+	if a.BackupImageSource != b.BackupImageSource {
+		changed++
+	}
+	if a.SyncCardDetails != b.SyncCardDetails {
+		changed++
+	}
+	if a.ColorsEnabled != b.ColorsEnabled {
+		changed++
+	}
+	if a.RequestDelayMs != b.RequestDelayMs {
+		changed++
+	}
+	if a.RateLimitCooldownSeconds != b.RateLimitCooldownSeconds {
+		changed++
+	}
+	if a.SaveSearchedCardsDefault != b.SaveSearchedCardsDefault {
+		changed++
+	}
+	if a.LastViewedSetOnTop != b.LastViewedSetOnTop {
+		changed++
+	}
+	if a.UserAgent != b.UserAgent {
+		changed++
+	}
+	return changed
+}
+
+func maskAPIKeyDisplay(key string) string {
+	trimmed := strings.TrimSpace(key)
+	if len(trimmed) <= 8 {
+		return "****"
+	}
+	return trimmed[:4] + "…" + trimmed[len(trimmed)-4:]
 }
 
 func normalizeLanguage(value string) string {

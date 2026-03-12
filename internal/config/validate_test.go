@@ -42,4 +42,22 @@ func TestValidate(t *testing.T) {
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected cooldown validation error")
 	}
+
+	cfg = Default()
+	cfg.APIKeyDailyLimit = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected API key daily limit validation error")
+	}
+
+	cfg = Default()
+	cfg.APIKeys = []string{"abc", "  "}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected blank API key validation error")
+	}
+
+	cfg = Default()
+	cfg.APIKeys = []string{"dup", "dup"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected duplicate API key validation error")
+	}
 }

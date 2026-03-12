@@ -162,8 +162,8 @@ func TestLoadUsesLegacyMainCollectionWhenCollectionFileMissing(t *testing.T) {
 	cardsPath := filepath.Join(dir, "cards.db")
 	collectionPath := filepath.Join(dir, "collection.db")
 	legacyMain := []byte(`{
-  "meta":{"schemaVersion":2,"createdAt":"2026-03-08T00:00:00Z","updatedAt":"2026-03-08T00:00:00Z"},
-  "syncState":{"catalogProvider":"tcgdex","priceProvider":"pokedata"},
+  "meta":{"schemaVersion":3,"createdAt":"2026-03-08T00:00:00Z","updatedAt":"2026-03-08T00:00:00Z"},
+  "syncState":{"catalogProvider":"tcgdex","priceProvider":"pokemonpricetracker"},
   "collection":{
     "sv4a-001":{"cardId":"sv4a-001","quantity":3,"createdAt":"2026-03-08T00:00:00Z","updatedAt":"2026-03-08T00:00:00Z"}
   }
