@@ -20,6 +20,8 @@ import (
 // TODO: show some stats on start, e.g. total value of collection, total amount of cards, most valuable card etc.
 // TODO: Directly allow searching for new cards when looking at a card
 // TODO: allow looking into the collection, same behavior as for new searches, but with the collection as source
+// TODO: Save last fetched card prices to card db to display collection worth in main menu total and after selecting a set
+// TODO: Real time update of the last synced time text in main menu
 
 func main() {
 	if err := app.Run(context.Background()); err != nil {
