@@ -38,6 +38,28 @@ import (
 )
 
 const imageCompatTestURL = "https://tcgplayer-cdn.tcgplayer.com/product/567569_in_800x800.jpg"
+const appDisplayName = "Pokémon Trading Card Value & Collection Tracker"
+
+var hotkeyActionSpecs = []hotkeyActionSpec{
+	{ID: "quit", Label: "Quit app", Description: "Global hard exit key"},
+	{ID: "back", Label: "Back / close", Description: "Go back from current screen"},
+	{ID: "confirm", Label: "Confirm", Description: "Select current option"},
+	{ID: "filter", Label: "Open filter", Description: "Focus filter input in list screens"},
+	{ID: "set_jump_id", Label: "Set jump by ID", Description: "Open set-id jump input in set list"},
+	{ID: "move_up", Label: "Move up", Description: "Move selection up"},
+	{ID: "move_down", Label: "Move down", Description: "Move selection down"},
+	{ID: "page_up", Label: "Page up", Description: "Move one page up"},
+	{ID: "page_down", Label: "Page down", Description: "Move one page down"},
+	{ID: "go_top", Label: "Go top", Description: "Jump to first item"},
+	{ID: "go_bottom", Label: "Go bottom", Description: "Jump to last item"},
+	{ID: "card_add", Label: "Card add", Description: "Add selected card to collection"},
+	{ID: "card_close", Label: "Card close", Description: "Close card detail"},
+	{ID: "card_left", Label: "Card action left", Description: "Move action to left button"},
+	{ID: "card_right", Label: "Card action right", Description: "Move action to right button"},
+	{ID: "main_browse", Label: "Main: browse sets", Description: "Open browse flow from main menu"},
+	{ID: "main_settings", Label: "Main: settings", Description: "Open settings from main menu"},
+	{ID: "main_quit", Label: "Main: quit", Description: "Quit directly from main menu"},
+}
 
 type uiMode int
 
@@ -58,6 +80,7 @@ const (
 	menuLanguage         menuKind = "language"
 	menuSet              menuKind = "set"
 	menuSettings         menuKind = "settings"
+	menuHotkeys          menuKind = "hotkeys"
 	menuAPIKeys          menuKind = "api_keys"
 	menuSettingBool      menuKind = "setting_bool"
 	menuImageCompat      menuKind = "image_compat"
@@ -92,6 +115,12 @@ type menuOption struct {
 	Value       string
 }
 
+type hotkeyActionSpec struct {
+	ID          string
+	Label       string
+	Description string
+}
+
 type mainMenuSnapshot struct {
 	SetCount          int
 	CardCount         int
@@ -99,6 +128,7 @@ type mainMenuSnapshot struct {
 	CollectionEntries int
 	CollectionCards   int
 	LastSync          string
+	LastSyncAt        *time.Time
 	CatalogProvider   string
 	PriceProvider     string
 }
@@ -208,6 +238,7 @@ type rootModel struct {
 	busyStatus string
 
 	statusPulseFrame int
+	stripeFrame      int
 	uiTickScheduled  bool
 }
 
@@ -274,7 +305,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			break
 		}
-		body := fmt.Sprintf("New sets: %d\nUpdated sets: %d\nCards are synced per set when you open one.", msg.stats.NewSets, msg.stats.UpdatedSets)
+		body := fmt.Sprintf("New sets: %d\nUpdated sets: %d", msg.stats.NewSets, msg.stats.UpdatedSets)
 		m.openMessage("Startup Sync Complete", body, nextMainMenu)
 	case setSyncProgressMsg:
 		m.setSyncProgress = msg.progress
@@ -344,6 +375,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case uiTickMsg:
 		m.uiTickScheduled = false
 		m.stepAnimations()
+		m.refreshMainMenuClock()
 	case tea.KeyMsg:
 		if quit := m.globalQuitKey(msg); quit != nil {
 			return m, quit
@@ -423,12 +455,11 @@ func (m *rootModel) fitToViewport(content string) string {
 }
 
 func (m *rootModel) globalQuitKey(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "ctrl+c":
+	switch {
+	case m.keyMatch(msg, "quit", "ctrl+c"):
 		return tea.Quit
-	default:
-		return nil
 	}
+	return nil
 }
 
 func (m *rootModel) spinnerActive() bool {
@@ -450,25 +481,17 @@ func (m *rootModel) maybeScheduleUITick(cmds *[]tea.Cmd) {
 }
 
 func (m *rootModel) animationsActive() bool {
-	switch m.mode {
-	case modeStartupSync, modeSetSync, modeBusy:
-		return true
-	case modeMenu:
-		switch m.menuKind {
-		case menuMain, menuLanguage, menuSet, menuSettings, menuSettingBool, menuImageCompatApply:
-			return true
-		default:
-			return m.menuTrailFrames > 0 || math.Abs(float64(m.menuCursor)-m.menuCursorVisual) > 0.01
-		}
-	case modeCardDetail:
-		return m.cardRefreshing
-	default:
-		return false
-	}
+	// Keep UI micro-animations active across screens so shared header elements
+	// (status pulse + animated stripe) stay alive even outside menus.
+	return true
 }
 
 func (m *rootModel) stepAnimations() {
 	m.statusPulseFrame = (m.statusPulseFrame + 1) % 24
+	m.stripeFrame++
+	if m.stripeFrame > 1000000 {
+		m.stripeFrame = 0
+	}
 
 	if m.mode == modeMenu {
 		m.menuAnimFrame++
@@ -820,8 +843,8 @@ func (m *rootModel) moveMenuCursor(next int) {
 
 func (m *rootModel) updateMenu(msg tea.KeyMsg) tea.Cmd {
 	if m.menuFilterActive {
-		switch msg.String() {
-		case "esc", "enter":
+		switch {
+		case m.keyMatch(msg, "back", "esc"), m.keyMatch(msg, "confirm", "enter"):
 			m.menuFilterActive = false
 			m.menuFilter.Blur()
 			return nil
@@ -832,31 +855,42 @@ func (m *rootModel) updateMenu(msg tea.KeyMsg) tea.Cmd {
 		return cmd
 	}
 
-	switch msg.String() {
-	case "q", "esc":
+	if m.menuKind == menuMain {
+		switch {
+		case m.keyMatch(msg, "main_browse", "b"):
+			return m.onMenuSelect("browse")
+		case m.keyMatch(msg, "main_settings", "s"):
+			return m.onMenuSelect("settings")
+		case m.keyMatch(msg, "main_quit", "q"):
+			return m.onMenuSelect("quit")
+		}
+	}
+
+	switch {
+	case m.keyMatch(msg, "back", "q", "esc"):
 		return m.runNextAction(m.menuCancel)
-	case "/":
+	case m.keyMatch(msg, "filter", "/"):
 		if m.menuFilterEnabled {
 			m.menuFilterActive = true
 			m.menuFilter.Focus()
 		}
-	case "i":
+	case m.keyMatch(msg, "set_jump_id", "i"):
 		if m.menuKind == menuSet {
 			m.openSetJumpInput()
 		}
-	case "up", "k":
+	case m.keyMatch(msg, "move_up", "up", "k"):
 		m.moveMenuCursor(m.menuCursor - 1)
-	case "down", "j":
+	case m.keyMatch(msg, "move_down", "down", "j"):
 		m.moveMenuCursor(m.menuCursor + 1)
-	case "pgup":
+	case m.keyMatch(msg, "page_up", "pgup"):
 		m.moveMenuCursor(m.menuCursor - m.menuMaxRows)
-	case "pgdown":
+	case m.keyMatch(msg, "page_down", "pgdown"):
 		m.moveMenuCursor(m.menuCursor + m.menuMaxRows)
-	case "home":
+	case m.keyMatch(msg, "go_top", "home"):
 		m.moveMenuCursor(0)
-	case "end":
+	case m.keyMatch(msg, "go_bottom", "end"):
 		m.moveMenuCursor(len(m.menuFiltered) - 1)
-	case "enter":
+	case m.keyMatch(msg, "confirm", "enter"):
 		if len(m.menuFiltered) == 0 {
 			return nil
 		}
@@ -873,7 +907,7 @@ func (m *rootModel) onMenuSelect(value string) tea.Cmd {
 		case "browse":
 			return m.openLanguageMenu()
 		case "settings":
-			m.settingsDraft = m.container.Config
+			m.settingsDraft = cloneConfig(m.container.Config)
 			m.openSettingsMenu()
 			return nil
 		case "quit":
@@ -886,6 +920,38 @@ func (m *rootModel) onMenuSelect(value string) tea.Cmd {
 		return m.openSetByID(value)
 	case menuSettings:
 		return m.onSettingsMenuSelect(value)
+	case menuHotkeys:
+		switch {
+		case value == "hotkey_back":
+			m.openSettingsMenu()
+			return nil
+		case value == "hotkey_reset":
+			m.settingsDraft.Hotkeys = config.DefaultHotkeys()
+			m.openHotkeysMenu()
+			return nil
+		case strings.HasPrefix(value, "hotkey_edit:"):
+			action := strings.TrimPrefix(value, "hotkey_edit:")
+			spec, ok := findHotkeyActionSpec(action)
+			if !ok {
+				m.openHotkeysMenu()
+				return nil
+			}
+			current := ""
+			if m.settingsDraft.Hotkeys != nil {
+				current = m.settingsDraft.Hotkeys[action]
+			}
+			if strings.TrimSpace(current) == "" {
+				current = config.DefaultHotkeys()[action]
+			}
+			m.openTextSetting(
+				"hotkey:"+action,
+				"Hotkey: "+spec.Label,
+				"Set key token (examples: enter, esc, /, k, up, pgdown, ctrl+c). Type 'default' to reset this action.",
+				current,
+				false,
+			)
+			return nil
+		}
 	case menuAPIKeys:
 		switch {
 		case value == "api_add":
@@ -950,10 +1016,10 @@ func (m *rootModel) runNextAction(action nextAction) tea.Cmd {
 }
 
 func (m *rootModel) updateInput(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "esc":
+	switch {
+	case m.keyMatch(msg, "back", "esc"):
 		return m.runNextAction(m.inputCancel)
-	case "enter":
+	case m.keyMatch(msg, "confirm", "enter"):
 		return m.onInputSubmit()
 	}
 	var cmd tea.Cmd
@@ -1012,7 +1078,7 @@ func (m *rootModel) onInputSubmit() tea.Cmd {
 			return nil
 		}
 		m.applyTextSetting(m.inputSettingKey, value)
-		if m.inputSettingKey == "api_add_key" {
+		if m.inputSettingKey == "api_add_key" || strings.HasPrefix(m.inputSettingKey, "hotkey:") {
 			return nil
 		}
 		m.openSettingsMenu()
@@ -1022,8 +1088,8 @@ func (m *rootModel) onInputSubmit() tea.Cmd {
 }
 
 func (m *rootModel) updateMessage(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "enter", "esc", "q":
+	switch {
+	case m.keyMatch(msg, "confirm", "enter"), m.keyMatch(msg, "back", "esc", "q"):
 		return m.runNextAction(m.messageNext)
 	}
 	return nil
@@ -1033,7 +1099,7 @@ func (m *rootModel) openMainMenu() tea.Cmd {
 	m.refreshMainMenuSnapshot()
 	m.setMenu(
 		menuMain,
-		"Pokemon Card Value",
+		appDisplayName,
 		"Quickly browse sets, lookup cards, and track your collection.",
 		[]menuOption{
 			{Label: "Browse sets", Description: "Open language and set picker", Value: "browse"},
@@ -1073,7 +1139,9 @@ func (m *rootModel) refreshMainMenuSnapshot() {
 		}
 
 		if db.SyncState.LastSuccessfulStartupSyncAt != nil {
-			snapshot.LastSync = util.HumanizeAge(db.SyncState.LastSuccessfulStartupSyncAt)
+			lastSyncAt := *db.SyncState.LastSuccessfulStartupSyncAt
+			snapshot.LastSyncAt = &lastSyncAt
+			snapshot.LastSync = util.HumanizeAge(snapshot.LastSyncAt)
 		}
 		snapshot.CatalogProvider = strings.TrimSpace(db.SyncState.CatalogProvider)
 		snapshot.PriceProvider = strings.TrimSpace(db.SyncState.PriceProvider)
@@ -1089,6 +1157,17 @@ func (m *rootModel) refreshMainMenuSnapshot() {
 		snapshot.PriceProvider = "pokemonpricetracker"
 	}
 	m.mainSnapshot = snapshot
+}
+
+func (m *rootModel) refreshMainMenuClock() {
+	if m.mode != modeMenu || m.menuKind != menuMain {
+		return
+	}
+	if m.mainSnapshot.LastSyncAt == nil {
+		m.mainSnapshot.LastSync = "never"
+		return
+	}
+	m.mainSnapshot.LastSync = util.HumanizeAge(m.mainSnapshot.LastSyncAt)
 }
 
 func (m *rootModel) openLanguageMenu() tea.Cmd {
@@ -1134,8 +1213,8 @@ func (m *rootModel) openLanguageMenu() tea.Cmd {
 	for _, key := range keys {
 		item := byLanguage[key]
 		options = append(options, menuOption{
-			Label:       fmt.Sprintf("%s (%d sets)", item.Display, item.Count),
-			Description: "Filter sets by this language",
+			Label:       item.Display,
+			Description: fmt.Sprintf("%d sets", item.Count),
 			Value:       item.Display,
 		})
 	}
@@ -1296,32 +1375,35 @@ func (m *rootModel) openCardDetail(card domain.Card) tea.Cmd {
 
 func (m *rootModel) updateCardDetail(msg tea.KeyMsg) tea.Cmd {
 	if m.container.Config.SaveSearchedCardsDefault {
-		switch msg.String() {
-		case "enter", "c", "esc", "q", "a":
+		switch {
+		case m.keyMatch(msg, "confirm", "enter"),
+			m.keyMatch(msg, "card_close", "c"),
+			m.keyMatch(msg, "back", "esc", "q"),
+			m.keyMatch(msg, "card_add", "a"):
 			return m.runNextAction(nextCardLookup)
 		}
 		return nil
 	}
 
-	switch msg.String() {
-	case "left", "h":
+	switch {
+	case m.keyMatch(msg, "card_left", "left", "h"):
 		if m.cardSelected > 0 {
 			m.cardSelected--
 		}
 		return nil
-	case "right", "l", "tab":
+	case m.keyMatch(msg, "card_right", "right", "l", "tab"):
 		if m.cardSelected < 1 {
 			m.cardSelected++
 		}
 		return nil
-	case "enter":
+	case m.keyMatch(msg, "confirm", "enter"):
 		if m.cardSelected == 1 {
 			return m.addCardToCollection()
 		}
 		return m.runNextAction(nextCardLookup)
-	case "a":
+	case m.keyMatch(msg, "card_add", "a"):
 		return m.addCardToCollection()
-	case "c", "esc", "q":
+	case m.keyMatch(msg, "card_close", "c"), m.keyMatch(msg, "back", "esc", "q"):
 		return m.runNextAction(nextCardLookup)
 	}
 	return nil
@@ -1371,6 +1453,7 @@ func (m *rootModel) openSettingsMenu() {
 		"Select one option to edit.",
 		[]menuOption{
 			{Label: fmt.Sprintf("API keys: %d configured / %d usable", len(m.settingsDraft.APIKeys), keySummary.Usable), Value: "api_keys"},
+			{Label: fmt.Sprintf("Hotkeys: %d actions", len(m.settingsDraft.Hotkeys)), Value: "hotkeys"},
 			{Label: fmt.Sprintf("API key daily limit: %d", m.settingsDraft.APIKeyDailyLimit), Value: "api_key_daily_limit"},
 			{Label: "Debug logging: " + onOff(m.settingsDraft.Debug), Value: "debug"},
 			{Label: fmt.Sprintf("Card refresh TTL: %d hours", m.settingsDraft.CardRefreshTTLHours), Value: "card_refresh_ttl"},
@@ -1399,6 +1482,9 @@ func (m *rootModel) openSettingsMenu() {
 
 func (m *rootModel) onSettingsMenuSelect(value string) tea.Cmd {
 	switch value {
+	case "hotkeys":
+		m.openHotkeysMenu()
+		return nil
 	case "api_keys":
 		m.openAPIKeysMenu()
 		return nil
@@ -1532,6 +1618,47 @@ func (m *rootModel) openAPIKeysMenu() {
 	)
 }
 
+func (m *rootModel) openHotkeysMenu() {
+	if m.settingsDraft.Hotkeys == nil {
+		m.settingsDraft.Hotkeys = config.DefaultHotkeys()
+	}
+	defaults := config.DefaultHotkeys()
+	options := make([]menuOption, 0, len(hotkeyActionSpecs)+2)
+	for _, spec := range hotkeyActionSpecs {
+		value := normalizedHotkeyToken(m.settingsDraft.Hotkeys[spec.ID])
+		if value == "" {
+			value = defaults[spec.ID]
+		}
+		options = append(options, menuOption{
+			Label:       fmt.Sprintf("%s: %s", spec.Label, value),
+			Description: spec.Description,
+			Value:       "hotkey_edit:" + spec.ID,
+		})
+	}
+	options = append(options,
+		menuOption{
+			Label:       "Reset all to defaults",
+			Description: "Restore original hotkey mapping",
+			Value:       "hotkey_reset",
+		},
+		menuOption{
+			Label:       "Back",
+			Description: "Return to settings",
+			Value:       "hotkey_back",
+		},
+	)
+
+	m.setMenu(
+		menuHotkeys,
+		"Hotkeys",
+		"Configure key bindings used across the CLI.",
+		options,
+		false,
+		16,
+		nextSettingsMenu,
+	)
+}
+
 func (m *rootModel) openBoolSetting(key, title, description string, current bool) {
 	options := []menuOption{
 		{Label: "Enabled", Value: "true"},
@@ -1615,6 +1742,25 @@ func (m *rootModel) applyTextSetting(key string, value string) {
 		m.openAPIKeysMenu()
 	case "user_agent":
 		m.settingsDraft.UserAgent = value
+	default:
+		if strings.HasPrefix(key, "hotkey:") {
+			action := strings.TrimPrefix(key, "hotkey:")
+			normalized := normalizedHotkeyToken(value)
+			if normalized == "" {
+				return
+			}
+			if m.settingsDraft.Hotkeys == nil {
+				m.settingsDraft.Hotkeys = config.DefaultHotkeys()
+			}
+			if normalized == "default" || normalized == "reset" {
+				if fallback, ok := config.DefaultHotkeys()[action]; ok {
+					m.settingsDraft.Hotkeys[action] = fallback
+				}
+			} else {
+				m.settingsDraft.Hotkeys[action] = normalized
+			}
+			m.openHotkeysMenu()
+		}
 	}
 }
 
@@ -1629,6 +1775,8 @@ func (m *rootModel) viewMenu() string {
 		return m.viewSetSelectionScreen(styles)
 	case menuSettings:
 		return m.viewSettingsSelectionScreen(styles)
+	case menuHotkeys:
+		return m.viewHotkeysSelectionScreen(styles)
 	case menuAPIKeys:
 		return m.viewAPIKeysSelectionScreen(styles)
 	case menuSettingBool, menuImageCompatApply:
@@ -1679,15 +1827,24 @@ func (m *rootModel) viewLanguageSelectionScreen(styles uitheme.Styles) string {
 		}
 	}
 
+	countStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Gold)
+	selectedLanguageStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Blue)
+	switch normalizeLanguage(selectedLanguage) {
+	case "japanese", "ja":
+		selectedLanguageStyle = styles.Value.Copy().Bold(true).Foreground(lipgloss.Color("#A855F7"))
+	case "english", "en":
+		selectedLanguageStyle = styles.Value.Copy().Bold(true).Foreground(uitheme.Green)
+	}
+
 	summaryLines := []string{
 		styles.Label.Render("Language Catalog"),
-		fmt.Sprintf("Available languages: %s", styles.Value.Render(strconv.Itoa(len(m.menuOptions)))),
-		fmt.Sprintf("Total sets in local DB: %s", styles.Value.Render(strconv.Itoa(len(m.allSets)))),
+		fmt.Sprintf("Available languages: %s", countStyle.Render(strconv.Itoa(len(m.menuOptions)))),
+		fmt.Sprintf("Total sets in local DB: %s", countStyle.Render(strconv.Itoa(len(m.allSets)))),
 	}
 	if selectedLanguage != "" {
 		summaryLines = append(summaryLines,
-			fmt.Sprintf("Selected language: %s", styles.Value.Render(selectedLanguage)),
-			fmt.Sprintf("Sets in selection: %s", styles.Value.Render(strconv.Itoa(setsInSelectedLanguage))),
+			fmt.Sprintf("Selected language: %s", selectedLanguageStyle.Render(selectedLanguage)),
+			fmt.Sprintf("Sets in selection: %s", countStyle.Render(strconv.Itoa(setsInSelectedLanguage))),
 		)
 	}
 
@@ -1698,10 +1855,18 @@ func (m *rootModel) viewLanguageSelectionScreen(styles uitheme.Styles) string {
 func (m *rootModel) viewSetSelectionScreen(styles uitheme.Styles) string {
 	selectedSet, selectedSetFound := m.currentSelectedSet()
 	summaryWidth := m.clampedContentWidth(18, 80, 20)
+	langStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Blue)
+	switch normalizeLanguage(m.selectedLanguage) {
+	case "japanese", "ja":
+		langStyle = styles.Value.Copy().Bold(true).Foreground(lipgloss.Color("#A855F7"))
+	case "english", "en":
+		langStyle = styles.Value.Copy().Bold(true).Foreground(uitheme.Green)
+	}
+	countStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Gold)
 	summaryLines := []string{
 		styles.Label.Render("Set Browser"),
-		fmt.Sprintf("Language: %s", styles.Value.Render(m.selectedLanguage)),
-		fmt.Sprintf("Matching sets: %s", styles.Value.Render(strconv.Itoa(len(m.filteredSets)))),
+		fmt.Sprintf("Language: %s", langStyle.Render(m.selectedLanguage)),
+		fmt.Sprintf("Matching sets: %s", countStyle.Render(strconv.Itoa(len(m.filteredSets)))),
 	}
 	if selectedSetFound {
 		nameWidth := summaryWidth - lipgloss.Width("Name: ") - 2
@@ -1712,9 +1877,9 @@ func (m *rootModel) viewSetSelectionScreen(styles uitheme.Styles) string {
 		summaryLines = append(summaryLines,
 			"",
 			styles.Label.Render("Selected Set"),
-			fmt.Sprintf("Name: %s", styles.Value.Render(nameValue)),
-			fmt.Sprintf("Release: %s", styles.Value.Render(selectedSet.ReleaseDate)),
-			fmt.Sprintf("Cards cached: %s", styles.Value.Render(strconv.Itoa(selectedSet.Total))),
+			fmt.Sprintf("Name: %s", styles.Value.Copy().Bold(true).Foreground(uitheme.Cream).Render(nameValue)),
+			fmt.Sprintf("Release: %s", styles.Muted.Copy().Foreground(uitheme.Slate).Render(selectedSet.ReleaseDate)),
+			fmt.Sprintf("Cards cached: %s", countStyle.Render(strconv.Itoa(selectedSet.Total))),
 		)
 	}
 
@@ -1771,6 +1936,23 @@ func (m *rootModel) viewAPIKeysSelectionScreen(styles uitheme.Styles) string {
 
 	hints := "Enter: Select  •  ↑/↓: Move  •  Esc/Q: Back"
 	return m.renderSelectionMenuScreen(styles, "Settings", "API Keys", summaryLines, "Key Actions", hints)
+}
+
+func (m *rootModel) viewHotkeysSelectionScreen(styles uitheme.Styles) string {
+	configured := 0
+	for _, spec := range hotkeyActionSpecs {
+		if normalizedHotkeyToken(m.settingsDraft.Hotkeys[spec.ID]) != "" {
+			configured++
+		}
+	}
+	summaryLines := []string{
+		styles.Label.Render("Hotkey Manager"),
+		fmt.Sprintf("Configurable actions: %s", styles.Value.Copy().Bold(true).Foreground(uitheme.Gold).Render(strconv.Itoa(len(hotkeyActionSpecs)))),
+		fmt.Sprintf("Configured actions: %s", styles.Value.Copy().Bold(true).Foreground(uitheme.Green).Render(strconv.Itoa(configured))),
+		styles.Muted.Render("Tip: set value to 'default' to reset one action."),
+	}
+	hints := "Enter: Edit  •  ↑/↓: Move  •  Esc/Q: Back"
+	return m.renderSelectionMenuScreen(styles, "Settings", "Hotkeys", summaryLines, "Hotkey Actions", hints)
 }
 
 func (m *rootModel) viewChoiceSelectionScreen(styles uitheme.Styles) string {
@@ -1855,6 +2037,10 @@ func (m *rootModel) renderMenuOptionCards(styles uitheme.Styles, maxRows int, co
 	setIDStyle := styles.Label.Copy().Foreground(uitheme.Blue)
 	setNameStyle := styles.Value.Copy().Bold(true)
 	setCardsStyle := styles.Success.Copy().Foreground(uitheme.Gold)
+	languageJapaneseStyle := styles.Value.Copy().Bold(true).Foreground(lipgloss.Color("#A855F7"))
+	languageEnglishStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Green)
+	languageOtherStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Blue)
+	languageCountStyle := styles.Muted.Copy().Foreground(uitheme.Slate)
 	setRowWidth := m.selectionRowWidth()
 	for i := start; i < end; i++ {
 		option := m.menuOptions[m.menuFiltered[i]]
@@ -1964,10 +2150,60 @@ func (m *rootModel) renderMenuOptionCards(styles uitheme.Styles, maxRows int, co
 				rowText = ansi.Truncate(rowText, setRowWidth, "")
 			}
 			if selected {
-				rows = append(rows, selectedRowStyle.Render(rowText))
+				rows = append(rows, lipgloss.NewStyle().Bold(true).Render(rowText))
 			} else {
-				rows = append(rows, normalRowStyle.Render(rowText))
+				rows = append(rows, rowText)
 			}
+			continue
+		}
+
+		if m.menuKind == menuLanguage {
+			langPlain := strings.TrimSpace(option.Value)
+			if langPlain == "" {
+				langPlain = strings.TrimSpace(option.Label)
+			}
+			langNorm := normalizeLanguage(langPlain)
+			langStyle := languageOtherStyle
+			switch langNorm {
+			case "japanese", "ja":
+				langStyle = languageJapaneseStyle
+			case "english", "en":
+				langStyle = languageEnglishStyle
+			}
+
+			countPlain := strings.TrimSpace(option.Description)
+			if countPlain == "" {
+				countPlain = "0 sets"
+			}
+			rowText := prefix + langStyle.Render(langPlain) + styles.Muted.Render(" • ") + languageCountStyle.Render(countPlain)
+			if lipgloss.Width(rowText) > setRowWidth {
+				rowText = ansi.Truncate(rowText, setRowWidth, "")
+			}
+			if selected {
+				rowText = lipgloss.NewStyle().Bold(true).Render(rowText)
+			}
+			rows = append(rows, rowText)
+			continue
+		}
+
+		if m.menuKind == menuMain {
+			actionStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Cream)
+			switch strings.ToLower(strings.TrimSpace(option.Value)) {
+			case "browse":
+				actionStyle = styles.Success.Copy().Foreground(uitheme.Green)
+			case "settings":
+				actionStyle = styles.Value.Copy().Bold(true).Foreground(lipgloss.Color("#A855F7"))
+			case "quit":
+				actionStyle = styles.Warn.Copy().Foreground(uitheme.Red)
+			}
+			rowText := prefix + actionStyle.Render(option.Label)
+			if lipgloss.Width(rowText) > setRowWidth {
+				rowText = ansi.Truncate(rowText, setRowWidth, "")
+			}
+			if selected {
+				rowText = selectedRowStyle.Render(rowText)
+			}
+			rows = append(rows, rowText)
 			continue
 		}
 
@@ -2028,15 +2264,26 @@ func (m *rootModel) findFilteredSetByID(id string) (domain.Set, bool) {
 
 func (m *rootModel) viewMainSelectionScreen(styles uitheme.Styles) string {
 	snap := m.mainSnapshot
-	stripeWidth := m.clampedContentWidth(10, 80, 20)
+	setCountStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Gold)
+	cardCountStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Green)
+	languageCountStyle := styles.Value.Copy().Bold(true).Foreground(lipgloss.Color("#A855F7"))
+	collectionCountStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Blue)
+	syncAgeStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Green)
+	catalogProviderStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Blue)
+	priceProviderStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Gold)
 
 	summaryLines := []string{
-		styles.Title.Render("Pokemon Card Value"),
-		styles.Muted.Render(m.mainMenuStripe(stripeWidth)),
-		"",
-		styles.Label.Render("Catalog:") + " " + styles.Value.Render(fmt.Sprintf("%d sets • %d cards • %d languages", snap.SetCount, snap.CardCount, snap.LanguageCount)),
-		styles.Label.Render("Collection:") + " " + styles.Value.Render(fmt.Sprintf("%d entries • %d cards", snap.CollectionEntries, snap.CollectionCards)),
-		styles.Label.Render("Sync:") + " " + styles.Value.Render(fmt.Sprintf("%s  (%s/%s)", snap.LastSync, snap.CatalogProvider, snap.PriceProvider)),
+		styles.Label.Render("Catalog:") + " " +
+			setCountStyle.Render(strconv.Itoa(snap.SetCount)) + styles.Muted.Render(" sets • ") +
+			cardCountStyle.Render(strconv.Itoa(snap.CardCount)) + styles.Muted.Render(" cards • ") +
+			languageCountStyle.Render(strconv.Itoa(snap.LanguageCount)) + styles.Muted.Render(" languages"),
+		styles.Label.Render("Collection:") + " " +
+			collectionCountStyle.Render(strconv.Itoa(snap.CollectionEntries)) + styles.Muted.Render(" entries • ") +
+			collectionCountStyle.Render(strconv.Itoa(snap.CollectionCards)) + styles.Muted.Render(" cards"),
+		styles.Label.Render("Sync:") + " " +
+			syncAgeStyle.Render(snap.LastSync) + styles.Muted.Render("  (") +
+			catalogProviderStyle.Render(snap.CatalogProvider) + styles.Muted.Render("/") +
+			priceProviderStyle.Render(snap.PriceProvider) + styles.Muted.Render(")"),
 	}
 
 	lines := make([]string, 0, 24)
@@ -2048,7 +2295,7 @@ func (m *rootModel) viewMainSelectionScreen(styles uitheme.Styles) string {
 	lines = append(lines, "", styles.Muted.Render("Enter: Select  •  ↑/↓: Move  •  Esc/Q: Quit  •  Ctrl+C: Quit"))
 
 	lines = m.clampLines(lines, 14)
-	return m.renderScreenShell(styles, "Main Menu", "v"+m.version, strings.Join(lines, "\n"))
+	return m.renderScreenShell(styles, "Main Menu", "", strings.Join(lines, "\n"))
 }
 
 func (m *rootModel) mainMenuStripe(width int) string {
@@ -2057,15 +2304,15 @@ func (m *rootModel) mainMenuStripe(width int) string {
 	}
 	runes := make([]rune, width)
 	for i := range runes {
-		runes[i] = '─'
+		runes[i] = '-'
 	}
-	head := m.menuAnimFrame % width
-	runes[head] = '◆'
+	head := m.stripeFrame % width
+	runes[head] = 'o'
 	if head+1 < width {
-		runes[head+1] = '─'
+		runes[head+1] = '-'
 	}
 	if head > 0 {
-		runes[head-1] = '·'
+		runes[head-1] = '.'
 	}
 	return string(runes)
 }
@@ -2085,24 +2332,130 @@ func (m *rootModel) viewInput() string {
 
 func (m *rootModel) viewMessage() string {
 	styles := m.styles()
+	body := m.renderMessageBody(styles)
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
-		m.messageBody,
+		body,
 		"",
 		styles.Muted.Render("Enter: Continue • Esc: Close"),
 	)
 	return m.renderScreenShell(styles, "Message", m.messageTitle, content)
 }
 
+func (m *rootModel) renderMessageBody(styles uitheme.Styles) string {
+	switch strings.ToLower(strings.TrimSpace(m.messageTitle)) {
+	case "set ready":
+		return renderSetReadyMessageBody(styles, m.messageBody)
+	case "startup sync complete":
+		return renderStartupSyncCompleteMessageBody(styles, m.messageBody)
+	default:
+		return m.messageBody
+	}
+}
+
+func renderSetReadyMessageBody(styles uitheme.Styles, body string) string {
+	lines := strings.Split(body, "\n")
+	out := make([]string, 0, len(lines))
+	setNameStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Blue)
+
+	for idx, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			out = append(out, "")
+			continue
+		}
+		if idx == 0 && !strings.Contains(trimmed, ":") {
+			out = append(out, setNameStyle.Render(trimmed))
+			continue
+		}
+
+		parts := strings.SplitN(trimmed, ":", 2)
+		if len(parts) != 2 {
+			out = append(out, styles.Value.Render(trimmed))
+			continue
+		}
+
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		out = append(out, renderSetReadyMetricLine(styles, key, val))
+	}
+	return strings.Join(out, "\n")
+}
+
+func renderStartupSyncCompleteMessageBody(styles uitheme.Styles, body string) string {
+	lines := strings.Split(body, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			out = append(out, "")
+			continue
+		}
+		parts := strings.SplitN(trimmed, ":", 2)
+		if len(parts) != 2 {
+			out = append(out, styles.Value.Render(trimmed))
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		out = append(out, renderSetReadyMetricLine(styles, key, val))
+	}
+	return strings.Join(out, "\n")
+}
+
+func renderSetReadyMetricLine(styles uitheme.Styles, key string, value string) string {
+	keyStyle := styles.Label
+	valueStyle := styles.Value
+	lowerKey := strings.ToLower(strings.TrimSpace(key))
+	count, hasCount := parseLeadingInt(value)
+
+	switch {
+	case strings.Contains(lowerKey, "failed"):
+		keyStyle = styles.Warn
+		if hasCount && count > 0 {
+			valueStyle = styles.Warn
+		} else {
+			valueStyle = styles.Muted
+		}
+	case strings.Contains(lowerKey, "new"),
+		strings.Contains(lowerKey, "updated"),
+		strings.Contains(lowerKey, "saved"),
+		strings.Contains(lowerKey, "synced"):
+		keyStyle = styles.Success
+		if hasCount && count > 0 {
+			valueStyle = styles.Success
+		} else {
+			valueStyle = styles.Muted
+		}
+	case strings.Contains(lowerKey, "total"):
+		keyStyle = styles.Label.Copy().Foreground(uitheme.Blue)
+		valueStyle = styles.Value.Copy().Bold(true).Foreground(uitheme.Gold)
+	}
+
+	return keyStyle.Render(key+":") + " " + valueStyle.Render(value)
+}
+
+func parseLeadingInt(value string) (int, bool) {
+	fields := strings.Fields(strings.TrimSpace(value))
+	if len(fields) == 0 {
+		return 0, false
+	}
+	token := strings.Trim(fields[0], ",")
+	n, err := strconv.Atoi(token)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
 func (m *rootModel) viewBusy() string {
 	styles := m.styles()
-	content := lipgloss.JoinVertical(
-		lipgloss.Left,
+	lines := []string{
 		fmt.Sprintf("%s %s", m.spinner.View(), m.busyStatus),
 		fmt.Sprintf("%s %s", m.statusPulse(styles, "info"), styles.Muted.Render("Working...")),
 		styles.Muted.Render("Please wait..."),
-	)
-	return m.renderScreenShell(styles, "Working", m.busyTitle, content)
+	}
+	return m.renderScreenShell(styles, "Working", m.busyTitle, strings.Join(lines, "\n"))
 }
 
 func (m *rootModel) viewStartupSync() string {
@@ -2187,16 +2540,19 @@ func (m *rootModel) viewCardDetail() string {
 	if strings.Contains(strings.ToLower(m.cardStatus), "updated") || strings.Contains(strings.ToLower(m.cardStatus), "saved") {
 		statusKind = "ok"
 	}
-	hints := "Esc/C: Close"
+	closeHotkey := strings.ToUpper(m.displayHotkey("card_close", "c"))
+	addHotkey := strings.ToUpper(m.displayHotkey("card_add", "a"))
+	backHotkey := strings.ToUpper(m.displayHotkey("back", "esc"))
+	hints := fmt.Sprintf("%s/%s: Close", backHotkey, closeHotkey)
 	if !m.container.Config.SaveSearchedCardsDefault {
-		hints = "Esc/C: Close  •  A: Add"
+		hints = fmt.Sprintf("%s/%s: Close  •  %s: Add", backHotkey, closeHotkey, addHotkey)
 	}
 	lines := append(
 		viewmodel.DetailLines(m.card),
 		"",
 		"Status: "+m.statusPulse(styles, statusKind)+" "+statusLine,
 		"",
-		renderActionRow(styles, m.cardSelected, m.container.Config.SaveSearchedCardsDefault),
+		renderActionRow(styles, m.cardSelected, m.container.Config.SaveSearchedCardsDefault, closeHotkey, addHotkey),
 		styles.Muted.Render(hints),
 	)
 	details := styles.Card.Copy().Width(rightWidth).Height(panelHeight).Render(strings.Join(lines, "\n"))
@@ -2208,16 +2564,16 @@ func (m *rootModel) viewCardDetail() string {
 }
 
 func (m *rootModel) renderScreenShell(styles uitheme.Styles, section string, subtitle string, body string) string {
-	headerLeft := styles.Active.Copy().Padding(0, 1).Render("PKMN TCG VALUE")
-	headerRight := styles.Muted.Render("v" + m.version + " • " + section)
-	header := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		headerLeft,
-		" ",
-		headerRight,
-	)
-
-	content := []string{header}
+	stripeWidth := m.selectionRowWidth()
+	if stripeWidth < 8 {
+		stripeWidth = 8
+	}
+	content := []string{
+		styles.Title.Render(appDisplayName),
+		styles.Muted.Render("v" + m.version),
+		styles.Muted.Render(m.mainMenuStripe(stripeWidth)),
+		"",
+	}
 	if strings.TrimSpace(subtitle) != "" && section != subtitle {
 		content = append(content, styles.Muted.Render(subtitle))
 	}
@@ -2401,6 +2757,38 @@ func (m *rootModel) statusPulse(styles uitheme.Styles, kind string) string {
 	}
 }
 
+func (m *rootModel) configuredHotkey(action string) string {
+	actionKey := strings.ToLower(strings.TrimSpace(action))
+	if actionKey == "" || m.container == nil {
+		return ""
+	}
+	hotkeys := m.container.Config.Hotkeys
+	if hotkeys == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(hotkeys[actionKey]))
+}
+
+func (m *rootModel) keyMatch(msg tea.KeyMsg, action string, fallbacks ...string) bool {
+	key := strings.ToLower(strings.TrimSpace(msg.String()))
+	if key == "" {
+		return false
+	}
+	if configured := m.configuredHotkey(action); configured != "" && key == configured {
+		return true
+	}
+	for _, fallback := range fallbacks {
+		if key == strings.ToLower(strings.TrimSpace(fallback)) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizedHotkeyToken(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
 func (m *rootModel) clampedContentWidth(outerPadding int, fallback int, minSafe int) int {
 	if m.width <= 0 {
 		return fallback
@@ -2541,6 +2929,9 @@ func settingsDiffCount(a config.Config, b config.Config) int {
 	if !reflect.DeepEqual(a.APIKeys, b.APIKeys) {
 		changed++
 	}
+	if !reflect.DeepEqual(a.Hotkeys, b.Hotkeys) {
+		changed++
+	}
 	if a.APIKeyDailyLimit != b.APIKeyDailyLimit {
 		changed++
 	}
@@ -2592,6 +2983,16 @@ func settingsDiffCount(a config.Config, b config.Config) int {
 	return changed
 }
 
+func findHotkeyActionSpec(actionID string) (hotkeyActionSpec, bool) {
+	want := strings.ToLower(strings.TrimSpace(actionID))
+	for _, spec := range hotkeyActionSpecs {
+		if spec.ID == want {
+			return spec, true
+		}
+	}
+	return hotkeyActionSpec{}, false
+}
+
 func maskAPIKeyDisplay(key string) string {
 	trimmed := strings.TrimSpace(key)
 	if len(trimmed) <= 8 {
@@ -2606,6 +3007,20 @@ func normalizeLanguage(value string) string {
 		return "unknown"
 	}
 	return strings.ToLower(trimmed)
+}
+
+func cloneConfig(cfg config.Config) config.Config {
+	out := cfg
+	if cfg.APIKeys != nil {
+		out.APIKeys = append([]string{}, cfg.APIKeys...)
+	}
+	if cfg.Hotkeys != nil {
+		out.Hotkeys = make(map[string]string, len(cfg.Hotkeys))
+		for action, key := range cfg.Hotkeys {
+			out.Hotkeys[action] = key
+		}
+	}
+	return out
 }
 
 func detectAppVersion() string {

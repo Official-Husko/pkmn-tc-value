@@ -4,6 +4,7 @@ type Config struct {
 	StartupSyncEnabled            bool     `json:"startupSyncEnabled"`
 	Debug                         bool     `json:"debug"`
 	APIKeys                       []string `json:"apiKeys,omitempty"`
+	Hotkeys                       map[string]string `json:"hotkeys,omitempty"`
 	APIKeyDailyLimit              int      `json:"apiKeyDailyLimit"`
 	CardRefreshTTLHours           int      `json:"cardRefreshTTLHours"`
 	ImagePreviewsEnabled          bool     `json:"imagePreviewsEnabled"`

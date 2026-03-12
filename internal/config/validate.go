@@ -29,6 +29,17 @@ func (c Config) Validate() error {
 		if hasDuplicateAPIKeys(c.APIKeys) {
 			return errors.New("API keys must be unique")
 		}
+		for action, hotkey := range c.Hotkeys {
+			if strings.TrimSpace(action) == "" {
+				return errors.New("hotkey actions cannot be blank")
+			}
+			if strings.TrimSpace(hotkey) == "" {
+				return errors.New("hotkeys cannot be blank")
+			}
+		}
+		if hasDuplicateHotkeys(c.Hotkeys) {
+			return errors.New("hotkeys must be unique")
+		}
 		return nil
 	}
 }
@@ -43,6 +54,24 @@ func hasDuplicateAPIKeys(keys []string) bool {
 		if normalized[i-1] == normalized[i] {
 			return true
 		}
+	}
+	return false
+}
+
+func hasDuplicateHotkeys(hotkeys map[string]string) bool {
+	if len(hotkeys) == 0 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(hotkeys))
+	for _, value := range hotkeys {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			return true
+		}
+		seen[normalized] = struct{}{}
 	}
 	return false
 }

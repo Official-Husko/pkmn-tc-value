@@ -103,6 +103,7 @@ func LoadOrCreate(path string) (Config, error) {
 		return Config{}, fmt.Errorf("decode config file: %w", err)
 	}
 	cfg.APIKeys = normalizeAPIKeys(cfg.APIKeys)
+	cfg.Hotkeys = normalizeHotkeys(cfg.Hotkeys)
 	var legacy struct {
 		ImageCaching   *bool `json:"imageCaching"`
 		SaveCardImages *bool `json:"saveCardImages"`
@@ -120,6 +121,7 @@ func LoadOrCreate(path string) (Config, error) {
 
 func Save(path string, cfg Config) error {
 	cfg.APIKeys = normalizeAPIKeys(cfg.APIKeys)
+	cfg.Hotkeys = normalizeHotkeys(cfg.Hotkeys)
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -149,6 +151,19 @@ func normalizeAPIKeys(keys []string) []string {
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+func normalizeHotkeys(hotkeys map[string]string) map[string]string {
+	out := DefaultHotkeys()
+	for action, hotkey := range hotkeys {
+		key := strings.ToLower(strings.TrimSpace(action))
+		value := strings.ToLower(strings.TrimSpace(hotkey))
+		if key == "" || value == "" {
+			continue
+		}
+		out[key] = value
 	}
 	return out
 }
