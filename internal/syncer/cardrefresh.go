@@ -55,11 +55,58 @@ func (s *CardRefreshService) Refresh(ctx context.Context, card domain.Card, set 
 			card.PriceProviderCardID = snapshot.PriceProviderCardID
 			persisted.PriceProviderCardID = snapshot.PriceProviderCardID
 		}
+		if strings.TrimSpace(snapshot.TCGPlayerID) != "" {
+			card.TCGPlayerID = snapshot.TCGPlayerID
+			persisted.TCGPlayerID = snapshot.TCGPlayerID
+			if strings.TrimSpace(card.PriceProviderCardID) == "" {
+				card.PriceProviderCardID = snapshot.TCGPlayerID
+				persisted.PriceProviderCardID = snapshot.TCGPlayerID
+			}
+		}
+		if strings.TrimSpace(snapshot.SetName) != "" {
+			card.SetName = snapshot.SetName
+			persisted.SetName = snapshot.SetName
+		}
+		if strings.TrimSpace(snapshot.CardName) != "" {
+			card.Name = snapshot.CardName
+			persisted.Name = snapshot.CardName
+		}
+		if strings.TrimSpace(snapshot.CardNumber) != "" {
+			card.Number = snapshot.CardNumber
+			persisted.Number = snapshot.CardNumber
+		}
+		if strings.TrimSpace(snapshot.TotalSetNumber) != "" {
+			card.TotalSetNumber = snapshot.TotalSetNumber
+			persisted.TotalSetNumber = snapshot.TotalSetNumber
+		}
+		if strings.TrimSpace(snapshot.Rarity) != "" {
+			card.Rarity = snapshot.Rarity
+			persisted.Rarity = snapshot.Rarity
+		}
+		if strings.TrimSpace(snapshot.CardType) != "" {
+			card.CardType = snapshot.CardType
+			persisted.CardType = snapshot.CardType
+		}
+		if strings.TrimSpace(snapshot.Artist) != "" {
+			card.Artist = snapshot.Artist
+			persisted.Artist = snapshot.Artist
+		}
+		if strings.TrimSpace(snapshot.ImageURL) != "" {
+			card.ImageURL = snapshot.ImageURL
+			persisted.ImageURL = snapshot.ImageURL
+		}
+		if strings.TrimSpace(snapshot.ImageBaseURL) != "" {
+			card.ImageBaseURL = snapshot.ImageBaseURL
+			persisted.ImageBaseURL = snapshot.ImageBaseURL
+		}
 		if strings.TrimSpace(snapshot.PriceProviderSetName) != "" {
 			set.PriceProviderSetName = snapshot.PriceProviderSetName
 		}
 		if strings.TrimSpace(snapshot.PriceProviderSetID) != "" {
 			set.PriceProviderSetID = snapshot.PriceProviderSetID
+		}
+		if strings.TrimSpace(snapshot.PriceProviderSetCode) != "" {
+			set.PriceProviderSetCode = snapshot.PriceProviderSetCode
 		}
 	}
 	if strings.TrimSpace(card.SetCode) == "" {
@@ -102,6 +149,9 @@ func (s *CardRefreshService) Refresh(ctx context.Context, card domain.Card, set 
 			}
 			if strings.TrimSpace(currentSet.PriceProviderSetID) == "" && strings.TrimSpace(set.PriceProviderSetID) != "" {
 				currentSet.PriceProviderSetID = set.PriceProviderSetID
+			}
+			if strings.TrimSpace(currentSet.PriceProviderSetCode) == "" && strings.TrimSpace(set.PriceProviderSetCode) != "" {
+				currentSet.PriceProviderSetCode = set.PriceProviderSetCode
 			}
 			db.Sets[persisted.SetID] = currentSet
 		}

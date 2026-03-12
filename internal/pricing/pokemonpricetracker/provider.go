@@ -29,75 +29,126 @@ func (p *Provider) Name() string {
 }
 
 func (p *Provider) RefreshCard(ctx context.Context, card domain.Card, set domain.Set, cfg config.Config) (domain.PriceSnapshot, error) {
-	providerCardID := strings.TrimSpace(card.PriceProviderCardID)
-	providerSetID := strings.TrimSpace(card.PriceProviderSetID)
+	providerCardID := firstNonEmpty(card.TCGPlayerID, card.PriceProviderCardID)
+	providerSetID := firstNonEmpty(card.PriceProviderSetID, set.PriceProviderSetID)
 	enrichment := CardEnrichment{}
+	var resolveErr error
 
 	if providerCardID == "" && p.resolver != nil {
 		resolved, err := p.resolver.EnsureLinkedCard(ctx, set, card, cfg)
 		if err != nil {
-			return domain.PriceSnapshot{}, err
-		}
-		enrichment = resolved
-		providerCardID = strings.TrimSpace(resolved.PriceProviderCardID)
-		if providerSetID == "" {
-			providerSetID = strings.TrimSpace(resolved.PriceProviderSetID)
+			resolveErr = err
+		} else {
+			enrichment = resolved
+			providerCardID = firstNonEmpty(resolved.TCGPlayerID, resolved.PriceProviderCardID)
+			if providerSetID == "" {
+				providerSetID = strings.TrimSpace(resolved.PriceProviderSetID)
+			}
 		}
 	}
 	if providerCardID == "" {
-		providerCardID = strings.TrimSpace(card.TCGPlayerID)
-	}
-	if providerCardID == "" {
-		return domain.PriceSnapshot{}, fmt.Errorf("missing price provider card id")
+		if resolveErr != nil {
+			return domain.PriceSnapshot{}, fmt.Errorf("missing tcgplayer id (resolver failed: %w)", resolveErr)
+		}
+		return domain.PriceSnapshot{}, fmt.Errorf("missing tcgplayer id")
 	}
 
 	language := set.Language
 	if strings.TrimSpace(language) == "" {
 		language = card.Language
 	}
-	baseCard, err := p.client.FetchCardByID(ctx, language, providerCardID, false, cfg)
-	if err != nil {
-		return domain.PriceSnapshot{}, err
+	sourceURL := fmt.Sprintf("%s/cards/%s/details?days=30&language=%s", publicBaseURL, providerCardID, normalizeAPILanguage(language))
+
+	publicCard, publicErr := p.client.FetchPublicDetails(ctx, language, providerCardID, cfg)
+	var baseCard trackerCard
+	var baseErr error
+	if publicErr != nil {
+		baseCard, baseErr = p.client.FetchCardByID(ctx, language, providerCardID, false, cfg)
+		if baseErr != nil {
+			return domain.PriceSnapshot{}, fmt.Errorf(
+				"refresh by tcgplayer id %s failed: public details: %v; v2 lookup: %v",
+				providerCardID,
+				publicErr,
+				baseErr,
+			)
+		}
 	}
 
-	checkedAt := parseCheckedAt(baseCard.Prices.LastUpdated)
+	checkedAt := parseCheckedAt(publicCard.Prices.LastUpdated)
+	if checkedAt.IsZero() {
+		checkedAt = parseCheckedAt(baseCard.Prices.LastUpdated)
+	}
 	if checkedAt.IsZero() {
 		checkedAt = time.Now().UTC()
 	}
 
-	ungraded := moneyFrom(baseCard.Prices.Market)
-	low := moneyFrom(firstNumber(baseCard.Prices.LowPrice, baseCard.Prices.Low))
-	psa10 := findPSA10Money(baseCard.EbayData)
-	sourceURL := v2BaseURL + "/cards?language=" + normalizeAPILanguage(language) + "&cardId=" + providerCardID
+	ungraded := moneyFrom(publicCard.Prices.Market)
+	low := moneyFrom(firstNumber(publicCard.Prices.LowPrice, publicCard.Prices.Low))
+	psa10 := findPSA10FromVariants(publicCard.Variants)
 
-	if psa10 == nil {
+	if (ungraded == nil || low == nil || psa10 == nil) && baseErr != nil {
+		baseCard, baseErr = p.client.FetchCardByID(ctx, language, providerCardID, false, cfg)
+	}
+	if baseErr == nil {
+		if ungraded == nil {
+			ungraded = moneyFrom(baseCard.Prices.Market)
+		}
+		if low == nil {
+			low = moneyFrom(firstNumber(baseCard.Prices.LowPrice, baseCard.Prices.Low))
+		}
+		if psa10 == nil {
+			psa10 = findPSA10Money(baseCard.EbayData)
+		}
+	}
+
+	if psa10 == nil && baseErr == nil {
 		ebayCard, ebayErr := p.client.FetchCardByID(ctx, language, providerCardID, true, cfg)
 		if ebayErr == nil {
 			psa10 = findPSA10Money(ebayCard.EbayData)
 		}
 	}
 
-	publicCard, detailsErr := p.client.FetchPublicDetails(ctx, language, providerCardID, cfg)
-	if detailsErr == nil {
-		if ungraded == nil {
-			ungraded = moneyFrom(publicCard.Prices.Market)
-		}
-		if low == nil {
-			low = moneyFrom(firstNumber(publicCard.Prices.LowPrice, publicCard.Prices.Low))
-		}
-		if psa10 == nil {
-			psa10 = findPSA10FromVariants(publicCard.Variants)
-		}
-		if checked := parseCheckedAt(publicCard.Prices.LastUpdated); !checked.IsZero() {
-			checkedAt = checked
-		}
+	if ungraded == nil {
+		ungraded = moneyFrom(firstNumber(publicCard.Variants["Normal"].MarketPrice))
+	}
+	if low == nil {
+		low = moneyFrom(firstNumber(publicCard.Variants["Normal"].LowPrice))
 	}
 
 	if psa10 == nil {
+		// Optional extra lookup; if key quota is exhausted we still keep market/low from public data.
 		history, historyErr := p.client.FetchInternalHistory(ctx, language, providerCardID, cfg)
 		if historyErr == nil {
 			psa10 = findPSA10Money(history.Data.EbayData)
 		}
+	}
+
+	setName := firstNonEmpty(publicCard.SetName, baseCard.SetName, set.Name, card.SetName)
+	cardName := firstNonEmpty(publicCard.Name, baseCard.Name, card.Name)
+	cardNumber := firstNonEmpty(publicCard.CardNumber, baseCard.CardNumber, card.Number)
+	totalSetNumber := firstNonEmpty(publicCard.TotalSetNumber, baseCard.TotalSetNumber, card.TotalSetNumber)
+	rarity := firstNonEmpty(publicCard.Rarity, baseCard.Rarity, card.Rarity)
+	cardType := firstNonEmpty(publicCard.CardType, baseCard.CardType, card.CardType)
+	artist := firstNonEmpty(publicCard.Artist, baseCard.Artist, card.Artist)
+	imageURL := firstNonEmpty(
+		publicCard.ImageCdnURL800,
+		publicCard.ImageCdnURL,
+		publicCard.ImageURL,
+		baseCard.ImageCdnURL800,
+		baseCard.ImageCdnURL,
+		baseCard.ImageURL,
+		card.ImageURL,
+	)
+	imageBaseURL := firstNonEmpty(
+		publicCard.ImageCdnURL800,
+		publicCard.ImageCdnURL,
+		baseCard.ImageCdnURL800,
+		baseCard.ImageCdnURL,
+		card.ImageBaseURL,
+	)
+
+	if strings.TrimSpace(sourceURL) == "" {
+		sourceURL = v2BaseURL + "/cards?language=" + normalizeAPILanguage(language) + "&cardId=" + providerCardID
 	}
 
 	return domain.PriceSnapshot{
@@ -106,10 +157,20 @@ func (p *Provider) RefreshCard(ctx context.Context, card domain.Card, set domain
 		PSA10:                psa10,
 		SourceURL:            sourceURL,
 		CheckedAt:            checkedAt,
+		TCGPlayerID:          providerCardID,
+		SetName:              setName,
+		CardName:             cardName,
+		CardNumber:           cardNumber,
+		TotalSetNumber:       totalSetNumber,
+		Rarity:               rarity,
+		CardType:             cardType,
+		Artist:               artist,
+		ImageURL:             imageURL,
+		ImageBaseURL:         imageBaseURL,
 		PriceProviderCardID:  providerCardID,
 		PriceProviderSetID:   firstNonEmpty(providerSetID, set.PriceProviderSetID),
-		PriceProviderSetName: firstNonEmpty(set.PriceProviderSetName, enrichment.SetEnglishName),
-		PriceProviderSetCode: firstNonEmpty(set.PriceProviderSetCode, set.PriceProviderSetID),
+		PriceProviderSetName: firstNonEmpty(set.PriceProviderSetName, enrichment.SetEnglishName, setName),
+		PriceProviderSetCode: firstNonEmpty(set.PriceProviderSetCode, set.SetCode),
 	}, nil
 }
 

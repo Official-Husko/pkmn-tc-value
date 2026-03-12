@@ -230,6 +230,12 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 		if strings.TrimSpace(enrichment.TCGPlayerID) != "" {
 			tcgPlayerID = strings.TrimSpace(enrichment.TCGPlayerID)
 		}
+		if tcgPlayerID == "" {
+			tcgPlayerID = priceProviderCardID
+		}
+		if priceProviderCardID == "" {
+			priceProviderCardID = tcgPlayerID
+		}
 		if existing.ID == "" {
 			result.NewCards++
 		} else if existing.Name != remoteCard.Name || existing.Rarity != rarity || existing.ImageBaseURL != imageBaseURL || existing.ImageURL != imageURL || existing.PriceProviderCardID != priceProviderCardID || existing.EnglishName != cardEnglishName {
@@ -369,8 +375,48 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 				if strings.TrimSpace(snapshot.PriceProviderCardID) != "" {
 					card.PriceProviderCardID = snapshot.PriceProviderCardID
 				}
+				if strings.TrimSpace(snapshot.TCGPlayerID) != "" {
+					card.TCGPlayerID = snapshot.TCGPlayerID
+					if strings.TrimSpace(card.PriceProviderCardID) == "" {
+						card.PriceProviderCardID = snapshot.TCGPlayerID
+					}
+				}
 				if strings.TrimSpace(snapshot.PriceProviderSetID) != "" {
 					card.PriceProviderSetID = snapshot.PriceProviderSetID
+					matchedPriceSetID = snapshot.PriceProviderSetID
+				}
+				if strings.TrimSpace(snapshot.PriceProviderSetName) != "" {
+					matchedPriceSetName = snapshot.PriceProviderSetName
+				}
+				if strings.TrimSpace(snapshot.PriceProviderSetCode) != "" {
+					matchedPriceSetCode = snapshot.PriceProviderSetCode
+				}
+				if strings.TrimSpace(snapshot.SetName) != "" {
+					card.SetName = snapshot.SetName
+				}
+				if strings.TrimSpace(snapshot.CardName) != "" {
+					card.Name = snapshot.CardName
+				}
+				if strings.TrimSpace(snapshot.CardNumber) != "" {
+					card.Number = snapshot.CardNumber
+				}
+				if strings.TrimSpace(snapshot.TotalSetNumber) != "" {
+					card.TotalSetNumber = snapshot.TotalSetNumber
+				}
+				if strings.TrimSpace(snapshot.Rarity) != "" {
+					card.Rarity = snapshot.Rarity
+				}
+				if strings.TrimSpace(snapshot.CardType) != "" {
+					card.CardType = snapshot.CardType
+				}
+				if strings.TrimSpace(snapshot.Artist) != "" {
+					card.Artist = snapshot.Artist
+				}
+				if strings.TrimSpace(snapshot.ImageURL) != "" {
+					card.ImageURL = snapshot.ImageURL
+				}
+				if strings.TrimSpace(snapshot.ImageBaseURL) != "" {
+					card.ImageBaseURL = snapshot.ImageBaseURL
 				}
 				nextCards[cardID] = card
 				result.DetailsSynced++

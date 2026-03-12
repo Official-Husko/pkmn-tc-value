@@ -1848,7 +1848,14 @@ func (m *rootModel) viewLanguageSelectionScreen(styles uitheme.Styles) string {
 		)
 	}
 
-	hints := "Enter: Select  •  ↑/↓: Move  •  /: Filter  •  Esc/Q: Back"
+	hints := fmt.Sprintf(
+		"%s: Select  •  %s/%s: Move  •  %s: Filter  •  %s: Back",
+		strings.ToUpper(m.displayHotkey("confirm", "enter")),
+		strings.ToUpper(m.displayHotkey("move_up", "k")),
+		strings.ToUpper(m.displayHotkey("move_down", "j")),
+		strings.ToUpper(m.displayHotkey("filter", "/")),
+		strings.ToUpper(m.displayHotkey("back", "esc")),
+	)
 	return m.renderSelectionMenuScreen(styles, "Language", "Choose Card Language", summaryLines, "Languages", hints)
 }
 
@@ -1883,7 +1890,15 @@ func (m *rootModel) viewSetSelectionScreen(styles uitheme.Styles) string {
 		)
 	}
 
-	hints := "Enter: Open Set  •  I: Jump by ID  •  ↑/↓: Move  •  /: Filter  •  Esc/Q: Back"
+	hints := fmt.Sprintf(
+		"%s: Open Set  •  %s: Jump by ID  •  %s/%s: Move  •  %s: Filter  •  %s: Back",
+		strings.ToUpper(m.displayHotkey("confirm", "enter")),
+		strings.ToUpper(m.displayHotkey("set_jump_id", "i")),
+		strings.ToUpper(m.displayHotkey("move_up", "k")),
+		strings.ToUpper(m.displayHotkey("move_down", "j")),
+		strings.ToUpper(m.displayHotkey("filter", "/")),
+		strings.ToUpper(m.displayHotkey("back", "esc")),
+	)
 	return m.renderSelectionMenuScreen(styles, "Set", "Choose a Set", summaryLines, "Sets", hints)
 }
 
@@ -1899,6 +1914,7 @@ func (m *rootModel) viewSettingsSelectionScreen(styles uitheme.Styles) string {
 	summaryLines := []string{
 		styles.Label.Render("Settings Draft"),
 		"Status: " + statusStyle.Render(statusValue),
+		fmt.Sprintf("Hotkeys: %s", styles.Value.Copy().Bold(true).Foreground(uitheme.Gold).Render(strconv.Itoa(len(m.settingsDraft.Hotkeys)))),
 		fmt.Sprintf("Image previews: %s", styles.Value.Render(onOff(m.settingsDraft.ImagePreviewsEnabled))),
 		fmt.Sprintf("Image caching: %s", styles.Value.Render(onOff(m.settingsDraft.ImageCaching))),
 		fmt.Sprintf("Startup metadata prefetch: %s", styles.Value.Render(onOff(m.settingsDraft.PrefetchCardMetadataOnStartup))),
@@ -1908,7 +1924,13 @@ func (m *rootModel) viewSettingsSelectionScreen(styles uitheme.Styles) string {
 		fmt.Sprintf("Last viewed set on top: %s", styles.Value.Render(onOff(m.settingsDraft.LastViewedSetOnTop))),
 	}
 
-	hints := "Enter: Edit/Apply  •  ↑/↓: Move  •  Esc/Q: Back"
+	hints := fmt.Sprintf(
+		"%s: Edit/Apply  •  %s/%s: Move  •  %s: Back",
+		strings.ToUpper(m.displayHotkey("confirm", "enter")),
+		strings.ToUpper(m.displayHotkey("move_up", "k")),
+		strings.ToUpper(m.displayHotkey("move_down", "j")),
+		strings.ToUpper(m.displayHotkey("back", "esc")),
+	)
 	return m.renderSelectionMenuScreen(styles, "Settings", "Tool Configuration", summaryLines, "Settings Actions", hints)
 }
 
@@ -1934,7 +1956,13 @@ func (m *rootModel) viewAPIKeysSelectionScreen(styles uitheme.Styles) string {
 		summaryLines = append(summaryLines, fmt.Sprintf("Daily cap per key: %s", styles.Value.Render(strconv.Itoa(limit))))
 	}
 
-	hints := "Enter: Select  •  ↑/↓: Move  •  Esc/Q: Back"
+	hints := fmt.Sprintf(
+		"%s: Select  •  %s/%s: Move  •  %s: Back",
+		strings.ToUpper(m.displayHotkey("confirm", "enter")),
+		strings.ToUpper(m.displayHotkey("move_up", "k")),
+		strings.ToUpper(m.displayHotkey("move_down", "j")),
+		strings.ToUpper(m.displayHotkey("back", "esc")),
+	)
 	return m.renderSelectionMenuScreen(styles, "Settings", "API Keys", summaryLines, "Key Actions", hints)
 }
 
@@ -1951,7 +1979,13 @@ func (m *rootModel) viewHotkeysSelectionScreen(styles uitheme.Styles) string {
 		fmt.Sprintf("Configured actions: %s", styles.Value.Copy().Bold(true).Foreground(uitheme.Green).Render(strconv.Itoa(configured))),
 		styles.Muted.Render("Tip: set value to 'default' to reset one action."),
 	}
-	hints := "Enter: Edit  •  ↑/↓: Move  •  Esc/Q: Back"
+	hints := fmt.Sprintf(
+		"%s: Edit  •  %s/%s: Move  •  %s: Back",
+		strings.ToUpper(m.displayHotkey("confirm", "enter")),
+		strings.ToUpper(m.displayHotkey("move_up", "k")),
+		strings.ToUpper(m.displayHotkey("move_down", "j")),
+		strings.ToUpper(m.displayHotkey("back", "esc")),
+	)
 	return m.renderSelectionMenuScreen(styles, "Settings", "Hotkeys", summaryLines, "Hotkey Actions", hints)
 }
 
@@ -1960,7 +1994,13 @@ func (m *rootModel) viewChoiceSelectionScreen(styles uitheme.Styles) string {
 		styles.Label.Render(m.menuTitle),
 		styles.Muted.Render(m.menuDescription),
 	}
-	hints := "Enter: Select  •  ↑/↓: Move  •  Esc/Q: Back"
+	hints := fmt.Sprintf(
+		"%s: Select  •  %s/%s: Move  •  %s: Back",
+		strings.ToUpper(m.displayHotkey("confirm", "enter")),
+		strings.ToUpper(m.displayHotkey("move_up", "k")),
+		strings.ToUpper(m.displayHotkey("move_down", "j")),
+		strings.ToUpper(m.displayHotkey("back", "esc")),
+	)
 	return m.renderSelectionMenuScreen(styles, "Settings", m.menuTitle, summaryLines, "Choices", hints)
 }
 
@@ -2292,7 +2332,14 @@ func (m *rootModel) viewMainSelectionScreen(styles uitheme.Styles) string {
 	actionRows, _, _ := m.renderMenuOptionCards(styles, maxVisible, true)
 	lines = append(lines, "", styles.Label.Render("Actions")+" "+m.statusPulse(styles, "info"))
 	lines = append(lines, actionRows...)
-	lines = append(lines, "", styles.Muted.Render("Enter: Select  •  ↑/↓: Move  •  Esc/Q: Quit  •  Ctrl+C: Quit"))
+	lines = append(lines, "", styles.Muted.Render(fmt.Sprintf(
+		"%s: Select  •  %s/%s: Move  •  %s: Back  •  %s: Quit",
+		strings.ToUpper(m.displayHotkey("confirm", "enter")),
+		strings.ToUpper(m.displayHotkey("move_up", "k")),
+		strings.ToUpper(m.displayHotkey("move_down", "j")),
+		strings.ToUpper(m.displayHotkey("back", "esc")),
+		strings.ToUpper(m.displayHotkey("quit", "ctrl+c")),
+	)))
 
 	lines = m.clampLines(lines, 14)
 	return m.renderScreenShell(styles, "Main Menu", "", strings.Join(lines, "\n"))
@@ -2326,7 +2373,11 @@ func (m *rootModel) viewInput() string {
 	if m.inputError != "" {
 		lines = append(lines, "", styles.Warn.Render(m.inputError))
 	}
-	lines = append(lines, "", styles.Muted.Render("Enter: Confirm • Esc: Back"))
+	lines = append(lines, "", styles.Muted.Render(fmt.Sprintf(
+		"%s: Confirm • %s: Back",
+		strings.ToUpper(m.displayHotkey("confirm", "enter")),
+		strings.ToUpper(m.displayHotkey("back", "esc")),
+	)))
 	return m.renderScreenShell(styles, "Input", m.inputTitle, strings.Join(lines, "\n"))
 }
 
@@ -2337,7 +2388,11 @@ func (m *rootModel) viewMessage() string {
 		lipgloss.Left,
 		body,
 		"",
-		styles.Muted.Render("Enter: Continue • Esc: Close"),
+		styles.Muted.Render(fmt.Sprintf(
+			"%s: Continue • %s: Close",
+			strings.ToUpper(m.displayHotkey("confirm", "enter")),
+			strings.ToUpper(m.displayHotkey("back", "esc")),
+		)),
 	)
 	return m.renderScreenShell(styles, "Message", m.messageTitle, content)
 }
@@ -2631,11 +2686,11 @@ func (m *rootModel) renderCardImageOverlay(panelWidth int, panelHeight int) stri
 	return b.String()
 }
 
-func renderActionRow(styles uitheme.Styles, selected int, autoSave bool) string {
+func renderActionRow(styles uitheme.Styles, selected int, autoSave bool, closeHotkey string, addHotkey string) string {
 	if autoSave {
 		return lipgloss.JoinHorizontal(
 			lipgloss.Left,
-			styles.Active.Render("C: Close (Enter)"),
+			styles.Active.Render(closeHotkey+": Close (Enter)"),
 			" ",
 			styles.Success.Render("Auto-saved"),
 		)
@@ -2656,9 +2711,9 @@ func renderActionRow(styles uitheme.Styles, selected int, autoSave bool) string 
 
 	return lipgloss.JoinHorizontal(
 		lipgloss.Left,
-		closeStyle.Render("C: "+closeLabel),
+		closeStyle.Render(closeHotkey+": "+closeLabel),
 		" ",
-		addStyle.Render("A: "+addLabel),
+		addStyle.Render(addHotkey+": "+addLabel),
 	)
 }
 
@@ -2787,6 +2842,13 @@ func (m *rootModel) keyMatch(msg tea.KeyMsg, action string, fallbacks ...string)
 
 func normalizedHotkeyToken(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func (m *rootModel) displayHotkey(action string, fallback string) string {
+	if configured := m.configuredHotkey(action); configured != "" {
+		return configured
+	}
+	return normalizedHotkeyToken(fallback)
 }
 
 func (m *rootModel) clampedContentWidth(outerPadding int, fallback int, minSafe int) int {

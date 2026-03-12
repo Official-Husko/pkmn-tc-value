@@ -147,7 +147,7 @@ func (c *Client) FetchCardByID(ctx context.Context, language string, cardID stri
 
 func (c *Client) FetchPublicDetails(ctx context.Context, language string, cardID string, cfg config.Config) (trackerCard, error) {
 	values := url.Values{}
-	values.Set("days", "999")
+	values.Set("days", "30")
 	values.Set("language", normalizeAPILanguage(language))
 	endpoint := fmt.Sprintf("%s/cards/%s/details?%s", publicBaseURL, url.PathEscape(strings.TrimSpace(cardID)), values.Encode())
 
