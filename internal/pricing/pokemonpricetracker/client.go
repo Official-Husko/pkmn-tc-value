@@ -204,6 +204,7 @@ func (c *Client) doV2(ctx context.Context, endpoint string, cfg config.Config) (
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if c.logger != nil {
+		c.logger.LogHTTP("pokemonpricetracker-v2", endpoint, resp.StatusCode, resp.Status, body)
 		c.logger.LogJSON("pokemonpricetracker-v2", endpoint, body)
 	}
 	if resp.StatusCode >= 300 {
@@ -230,6 +231,7 @@ func (c *Client) doPublic(ctx context.Context, endpoint string, cfg config.Confi
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if c.logger != nil {
+		c.logger.LogHTTP("pokemonpricetracker-public", endpoint, resp.StatusCode, resp.Status, body)
 		c.logger.LogJSON("pokemonpricetracker-public", endpoint, body)
 	}
 	if resp.StatusCode >= 300 {

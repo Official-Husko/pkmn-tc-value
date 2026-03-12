@@ -8,7 +8,6 @@ import (
 )
 
 // TODO: add support to export collection as a csv, json and html file
-// TODO: more colors and animations in the terminal output
 // TODO: show more data for the cards in the detail view
 // TODO: downloading card images has the amount twice printed
 // TODO: show the collected amount of cards and total amount  next to name in list
@@ -21,8 +20,8 @@ import (
 // TODO: Directly allow searching for new cards when looking at a card
 // TODO: allow looking into the collection, same behavior as for new searches, but with the collection as source
 // TODO: Save last fetched card prices to card db to display collection worth in main menu total and after selecting a set
-// TODO: Real time update of the last synced time text in main menu
-
+// TODO: Cleanup config file, proper formatting with {} and such, nested and more organized
+// TODO: Parallel support for build full db
 func main() {
 	if err := app.Run(context.Background()); err != nil {
 		log.Fatal(err)

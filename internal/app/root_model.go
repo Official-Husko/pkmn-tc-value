@@ -80,6 +80,8 @@ const (
 	menuLanguage         menuKind = "language"
 	menuSet              menuKind = "set"
 	menuSettings         menuKind = "settings"
+	menuDatabaseActions  menuKind = "database_actions"
+	menuBuildFullConfirm menuKind = "build_full_confirm"
 	menuHotkeys          menuKind = "hotkeys"
 	menuAPIKeys          menuKind = "api_keys"
 	menuSettingBool      menuKind = "setting_bool"
@@ -162,6 +164,15 @@ type imageCompatDoneMsg struct {
 	err       error
 }
 
+type fullBuildProgressMsg struct {
+	status string
+}
+
+type fullBuildDoneMsg struct {
+	summary string
+	err     error
+}
+
 type uiTickMsg struct{}
 
 type rootModel struct {
@@ -181,11 +192,13 @@ type rootModel struct {
 	startupProgressCh chan syncer.StartupProgress
 	startupDoneCh     chan startupDoneMsg
 
-	setSyncProgress   syncer.SetSyncProgress
-	setSyncProgressCh chan syncer.SetSyncProgress
-	setSyncDoneCh     chan setSyncDoneMsg
-	startupReveal     int
-	startupRevealGoal int
+	setSyncProgress     syncer.SetSyncProgress
+	setSyncProgressCh   chan syncer.SetSyncProgress
+	setSyncDoneCh       chan setSyncDoneMsg
+	fullBuildProgressCh chan string
+	fullBuildDoneCh     chan fullBuildDoneMsg
+	startupReveal       int
+	startupRevealGoal   int
 
 	messageTitle string
 	messageBody  string
@@ -372,6 +385,15 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			8,
 			nextSettingsMenu,
 		)
+	case fullBuildProgressMsg:
+		m.busyStatus = msg.status
+		cmds = append(cmds, waitFullBuildProgress(m.fullBuildProgressCh))
+	case fullBuildDoneMsg:
+		if msg.err != nil {
+			m.openMessage("Build Full DB Failed", msg.err.Error(), nextSettingsMenu)
+			break
+		}
+		m.openMessage("Build Full DB Complete", msg.summary, nextSettingsMenu)
 	case uiTickMsg:
 		m.uiTickScheduled = false
 		m.stepAnimations()
@@ -759,6 +781,22 @@ func waitSetSyncDone(ch <-chan setSyncDoneMsg) tea.Cmd {
 	}
 }
 
+func waitFullBuildProgress(ch <-chan string) tea.Cmd {
+	return func() tea.Msg {
+		status, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return fullBuildProgressMsg{status: status}
+	}
+}
+
+func waitFullBuildDone(ch <-chan fullBuildDoneMsg) tea.Cmd {
+	return func() tea.Msg {
+		return <-ch
+	}
+}
+
 func (m *rootModel) openMessage(title string, body string, next nextAction) {
 	m.mode = modeMessage
 	m.messageTitle = title
@@ -920,6 +958,27 @@ func (m *rootModel) onMenuSelect(value string) tea.Cmd {
 		return m.openSetByID(value)
 	case menuSettings:
 		return m.onSettingsMenuSelect(value)
+	case menuDatabaseActions:
+		switch value {
+		case "db_clear_catalog":
+			return m.clearCatalogData()
+		case "db_clear_collection":
+			return m.clearCollectionData()
+		case "db_build_full":
+			m.openBuildFullConfirmMenu()
+			return nil
+		case "db_back":
+			m.openSettingsMenu()
+			return nil
+		}
+	case menuBuildFullConfirm:
+		switch value {
+		case "build_full_continue":
+			return m.startFullBuildCmd()
+		case "build_full_cancel":
+			m.openDatabaseActionsMenu()
+			return nil
+		}
 	case menuHotkeys:
 		switch {
 		case value == "hotkey_back":
@@ -1454,6 +1513,7 @@ func (m *rootModel) openSettingsMenu() {
 		[]menuOption{
 			{Label: fmt.Sprintf("API keys: %d configured / %d usable", len(m.settingsDraft.APIKeys), keySummary.Usable), Value: "api_keys"},
 			{Label: fmt.Sprintf("Hotkeys: %d actions", len(m.settingsDraft.Hotkeys)), Value: "hotkeys"},
+			{Label: "Database Actions", Value: "database_actions"},
 			{Label: fmt.Sprintf("API key daily limit: %d", m.settingsDraft.APIKeyDailyLimit), Value: "api_key_daily_limit"},
 			{Label: "Debug logging: " + onOff(m.settingsDraft.Debug), Value: "debug"},
 			{Label: fmt.Sprintf("Card refresh TTL: %d hours", m.settingsDraft.CardRefreshTTLHours), Value: "card_refresh_ttl"},
@@ -1482,6 +1542,9 @@ func (m *rootModel) openSettingsMenu() {
 
 func (m *rootModel) onSettingsMenuSelect(value string) tea.Cmd {
 	switch value {
+	case "database_actions":
+		m.openDatabaseActionsMenu()
+		return nil
 	case "hotkeys":
 		m.openHotkeysMenu()
 		return nil
@@ -1659,6 +1722,157 @@ func (m *rootModel) openHotkeysMenu() {
 	)
 }
 
+func (m *rootModel) openDatabaseActionsMenu() {
+	m.setMenu(
+		menuDatabaseActions,
+		"Database Actions",
+		"Danger zone actions for local data.",
+		[]menuOption{
+			{Label: "Clear database", Description: "Remove all local sets and cards (keeps collection)", Value: "db_clear_catalog"},
+			{Label: "Clear collection", Description: "Remove all collection entries", Value: "db_clear_collection"},
+			{Label: "Build Full DB", Description: "Sync all sets and cards with details", Value: "db_build_full"},
+			{Label: "Back", Description: "Return to settings", Value: "db_back"},
+		},
+		false,
+		10,
+		nextSettingsMenu,
+	)
+}
+
+func (m *rootModel) openBuildFullConfirmMenu() {
+	warning := strings.Join([]string{
+		"!! Warning !!",
+		"",
+		"Doing a full Database Build can take a long time depending on internet speed!",
+		"We recommend at least 10 api keys being setup for pokeprice.",
+		"",
+		"Are you sure you want to continue?",
+	}, "\n")
+	m.setMenu(
+		menuBuildFullConfirm,
+		"Build Full DB",
+		warning,
+		[]menuOption{
+			{Label: "Cancel", Description: "Go back to Database Actions", Value: "build_full_cancel"},
+			{Label: "Continue", Description: "Start full database build now", Value: "build_full_continue"},
+		},
+		false,
+		8,
+		nextSettingsMenu,
+	)
+}
+
+func (m *rootModel) clearCatalogData() tea.Cmd {
+	if err := m.container.Store.Update(func(db *store.DB) error {
+		db.Sets = make(map[string]domain.Set)
+		db.CardsBySet = make(map[string]map[string]domain.Card)
+		db.SyncState.LastStartupSyncAt = nil
+		db.SyncState.LastSuccessfulStartupSyncAt = nil
+		db.SyncState.LastViewedSetID = ""
+		db.SyncState.CatalogProvider = "tcgdex"
+		db.SyncState.PriceProvider = "pokemonpricetracker"
+		return nil
+	}); err != nil {
+		m.openMessage("Database Actions", "Failed to clear database: "+err.Error(), nextSettingsMenu)
+		return nil
+	}
+	m.openMessage("Database Actions", "Local set/card database was cleared.", nextSettingsMenu)
+	return nil
+}
+
+func (m *rootModel) clearCollectionData() tea.Cmd {
+	if err := m.container.Store.Update(func(db *store.DB) error {
+		db.Collection = make(map[string]domain.CollectionEntry)
+		return nil
+	}); err != nil {
+		m.openMessage("Database Actions", "Failed to clear collection: "+err.Error(), nextSettingsMenu)
+		return nil
+	}
+	m.openMessage("Database Actions", "Collection database was cleared.", nextSettingsMenu)
+	return nil
+}
+
+func (m *rootModel) startFullBuildCmd() tea.Cmd {
+	m.mode = modeBusy
+	m.busyTitle = "Build Full DB"
+	m.busyStatus = "Preparing full database build..."
+	m.fullBuildProgressCh = make(chan string, 256)
+	m.fullBuildDoneCh = make(chan fullBuildDoneMsg, 1)
+
+	go func() {
+		report := func(status string) {
+			select {
+			case m.fullBuildProgressCh <- status:
+			default:
+			}
+		}
+
+		report("Refreshing set catalog...")
+		stats, err := m.container.StartupSync.Run(m.ctx, func(syncer.StartupProgress) {})
+		if err != nil {
+			m.fullBuildDoneCh <- fullBuildDoneMsg{err: err}
+			close(m.fullBuildProgressCh)
+			return
+		}
+
+		sets, err := m.container.Sets.List()
+		if err != nil {
+			m.fullBuildDoneCh <- fullBuildDoneMsg{err: err}
+			close(m.fullBuildProgressCh)
+			return
+		}
+
+		totalSets := len(sets)
+		totalCards := 0
+		totalUpdated := 0
+		totalImages := 0
+		totalDetailsSynced := 0
+		totalDetailsFailed := 0
+		failedSets := 0
+
+		for idx, set := range sets {
+			select {
+			case <-m.ctx.Done():
+				m.fullBuildDoneCh <- fullBuildDoneMsg{err: m.ctx.Err()}
+				close(m.fullBuildProgressCh)
+				return
+			default:
+			}
+			report(fmt.Sprintf("Syncing set %d/%d: %s", idx+1, totalSets, set.Name))
+			result, syncErr := m.container.SetSync.SyncSet(m.ctx, set.ID, syncer.SetSyncOptions{
+				ImageCaching:    m.container.Config.ImageCaching,
+				SyncCardDetails: true,
+				Config:          m.container.Config,
+			}, nil)
+			if syncErr != nil {
+				failedSets++
+				continue
+			}
+			totalCards += result.NewCards
+			totalUpdated += result.UpdatedCards
+			totalImages += result.ImagesSaved
+			totalDetailsSynced += result.DetailsSynced
+			totalDetailsFailed += result.DetailsFailed
+		}
+
+		summary := strings.Join([]string{
+			fmt.Sprintf("Startup new sets: %d", stats.NewSets),
+			fmt.Sprintf("Startup updated sets: %d", stats.UpdatedSets),
+			fmt.Sprintf("Sets processed: %d", totalSets),
+			fmt.Sprintf("Set sync failures: %d", failedSets),
+			fmt.Sprintf("New cards: %d", totalCards),
+			fmt.Sprintf("Updated cards: %d", totalUpdated),
+			fmt.Sprintf("Images saved: %d", totalImages),
+			fmt.Sprintf("Details synced: %d", totalDetailsSynced),
+			fmt.Sprintf("Details failed: %d", totalDetailsFailed),
+		}, "\n")
+		m.fullBuildDoneCh <- fullBuildDoneMsg{summary: summary}
+		close(m.fullBuildProgressCh)
+	}()
+
+	return tea.Batch(m.spinner.Tick, waitFullBuildProgress(m.fullBuildProgressCh), waitFullBuildDone(m.fullBuildDoneCh))
+}
+
 func (m *rootModel) openBoolSetting(key, title, description string, current bool) {
 	options := []menuOption{
 		{Label: "Enabled", Value: "true"},
@@ -1779,7 +1993,9 @@ func (m *rootModel) viewMenu() string {
 		return m.viewHotkeysSelectionScreen(styles)
 	case menuAPIKeys:
 		return m.viewAPIKeysSelectionScreen(styles)
-	case menuSettingBool, menuImageCompatApply:
+	case menuBuildFullConfirm:
+		return m.viewBuildFullConfirmScreen(styles)
+	case menuDatabaseActions, menuSettingBool, menuImageCompatApply:
 		return m.viewChoiceSelectionScreen(styles)
 	default:
 		return m.viewGenericMenuScreen(styles)
@@ -2002,6 +2218,32 @@ func (m *rootModel) viewChoiceSelectionScreen(styles uitheme.Styles) string {
 		strings.ToUpper(m.displayHotkey("back", "esc")),
 	)
 	return m.renderSelectionMenuScreen(styles, "Settings", m.menuTitle, summaryLines, "Choices", hints)
+}
+
+func (m *rootModel) viewBuildFullConfirmScreen(styles uitheme.Styles) string {
+	slowFlash := (m.statusPulseFrame / 12) % 2
+	warnColor := lipgloss.Color("#DC2626")
+	if slowFlash == 1 {
+		warnColor = lipgloss.Color("#F87171")
+	}
+	warnStyle := styles.Warn.Copy().Foreground(warnColor).Bold(true)
+
+	summaryLines := []string{
+		warnStyle.Render("!! Warning !!"),
+		"",
+		warnStyle.Render("Doing a full Database Build can take a long time depending on internet speed!"),
+		warnStyle.Render("We recommend at least 10 api keys being setup for pokeprice."),
+		"",
+		warnStyle.Render("Are you sure you want to continue?"),
+	}
+	hints := fmt.Sprintf(
+		"%s: Select  •  %s/%s: Move  •  %s: Back",
+		strings.ToUpper(m.displayHotkey("confirm", "enter")),
+		strings.ToUpper(m.displayHotkey("move_up", "k")),
+		strings.ToUpper(m.displayHotkey("move_down", "j")),
+		strings.ToUpper(m.displayHotkey("back", "esc")),
+	)
+	return m.renderSelectionMenuScreen(styles, "Settings", "Build Full DB", summaryLines, "Confirm Action", hints)
 }
 
 func (m *rootModel) renderSelectionMenuScreen(styles uitheme.Styles, section string, subtitle string, summaryLines []string, actionTitle string, hints string) string {
@@ -2247,6 +2489,41 @@ func (m *rootModel) renderMenuOptionCards(styles uitheme.Styles, maxRows int, co
 			continue
 		}
 
+		if m.menuKind == menuBuildFullConfirm {
+			labelStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Cream)
+			switch strings.ToLower(strings.TrimSpace(option.Value)) {
+			case "build_full_continue":
+				labelStyle = styles.Warn.Copy().Foreground(uitheme.Red)
+			case "build_full_cancel":
+				labelStyle = styles.Success.Copy().Foreground(uitheme.Green)
+			}
+			labelPlain := strings.TrimSpace(option.Label)
+			descPlain := strings.TrimSpace(option.Description)
+			maxTextWidth := setRowWidth - lipgloss.Width(prefix)
+			if maxTextWidth < 1 {
+				maxTextWidth = 1
+			}
+			labelTruncated := truncateToWidth(labelPlain, maxTextWidth)
+			rendered := labelStyle.Render(labelTruncated)
+
+			if descPlain != "" && !compact {
+				remaining := maxTextWidth - lipgloss.Width(labelTruncated)
+				if remaining > lipgloss.Width(" · ") {
+					descWidth := remaining - lipgloss.Width(" · ")
+					descTruncated := truncateToWidth(descPlain, descWidth)
+					if strings.TrimSpace(descTruncated) != "" {
+						rendered += styles.Muted.Render(" · " + descTruncated)
+					}
+				}
+			}
+			if selected {
+				rendered = lipgloss.NewStyle().Bold(true).Render(rendered)
+			}
+			rowText := prefix + rendered
+			rows = append(rows, rowText)
+			continue
+		}
+
 		row := titleLine
 		if compact {
 			rows = append(rows, row)
@@ -2403,6 +2680,8 @@ func (m *rootModel) renderMessageBody(styles uitheme.Styles) string {
 		return renderSetReadyMessageBody(styles, m.messageBody)
 	case "startup sync complete":
 		return renderStartupSyncCompleteMessageBody(styles, m.messageBody)
+	case "build full db complete":
+		return renderBuildFullDBCompleteMessageBody(styles, m.messageBody)
 	default:
 		return m.messageBody
 	}
@@ -2458,6 +2737,27 @@ func renderStartupSyncCompleteMessageBody(styles uitheme.Styles, body string) st
 	return strings.Join(out, "\n")
 }
 
+func renderBuildFullDBCompleteMessageBody(styles uitheme.Styles, body string) string {
+	lines := strings.Split(body, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			out = append(out, "")
+			continue
+		}
+		parts := strings.SplitN(trimmed, ":", 2)
+		if len(parts) != 2 {
+			out = append(out, styles.Value.Render(trimmed))
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		out = append(out, renderBuildFullDBMetricLine(styles, key, val))
+	}
+	return strings.Join(out, "\n")
+}
+
 func renderSetReadyMetricLine(styles uitheme.Styles, key string, value string) string {
 	keyStyle := styles.Label
 	valueStyle := styles.Value
@@ -2483,6 +2783,39 @@ func renderSetReadyMetricLine(styles uitheme.Styles, key string, value string) s
 			valueStyle = styles.Muted
 		}
 	case strings.Contains(lowerKey, "total"):
+		keyStyle = styles.Label.Copy().Foreground(uitheme.Blue)
+		valueStyle = styles.Value.Copy().Bold(true).Foreground(uitheme.Gold)
+	}
+
+	return keyStyle.Render(key+":") + " " + valueStyle.Render(value)
+}
+
+func renderBuildFullDBMetricLine(styles uitheme.Styles, key string, value string) string {
+	keyStyle := styles.Label
+	valueStyle := styles.Value
+	lowerKey := strings.ToLower(strings.TrimSpace(key))
+	count, hasCount := parseLeadingInt(value)
+
+	switch {
+	case strings.Contains(lowerKey, "failed"), strings.Contains(lowerKey, "failure"):
+		keyStyle = styles.Warn
+		if hasCount && count > 0 {
+			valueStyle = styles.Warn
+		} else {
+			valueStyle = styles.Muted
+		}
+	case strings.Contains(lowerKey, "new"),
+		strings.Contains(lowerKey, "updated"),
+		strings.Contains(lowerKey, "saved"),
+		strings.Contains(lowerKey, "synced"):
+		keyStyle = styles.Success
+		if hasCount && count > 0 {
+			valueStyle = styles.Success
+		} else {
+			valueStyle = styles.Muted
+		}
+	case strings.Contains(lowerKey, "processed"),
+		strings.Contains(lowerKey, "total"):
 		keyStyle = styles.Label.Copy().Foreground(uitheme.Blue)
 		valueStyle = styles.Value.Copy().Bold(true).Foreground(uitheme.Gold)
 	}

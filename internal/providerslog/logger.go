@@ -43,8 +43,40 @@ func (l *Logger) LogJSON(provider string, endpoint string, body []byte) {
 	if len(body) == 0 || !json.Valid(body) {
 		return
 	}
+	l.write(provider, endpoint, "json", body)
+}
+
+func (l *Logger) LogHTTP(provider string, endpoint string, statusCode int, status string, body []byte) {
+	if l == nil || !l.enabled {
+		return
+	}
+
+	record := map[string]any{
+		"url":        strings.TrimSpace(endpoint),
+		"statusCode": statusCode,
+		"status":     strings.TrimSpace(status),
+	}
+
+	if len(body) > 0 {
+		if json.Valid(body) {
+			raw := make(json.RawMessage, len(body))
+			copy(raw, body)
+			record["json"] = raw
+		} else {
+			record["body"] = string(body)
+		}
+	}
+
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return
+	}
+	l.write(provider, endpoint, fmt.Sprintf("http_%03d", statusCode), payload)
+}
+
+func (l *Logger) write(provider string, endpoint string, suffix string, body []byte) {
 	base := strings.TrimSpace(l.baseDir)
-	if base == "" {
+	if base == "" || len(body) == 0 {
 		return
 	}
 
@@ -72,7 +104,13 @@ func (l *Logger) LogJSON(provider string, endpoint string, body []byte) {
 	if len(endpointName) > 72 {
 		endpointName = endpointName[:72]
 	}
-	name := fmt.Sprintf("%s_%06d_%s_%s.json", now.Format("20060102T150405.000Z"), seq, endpointName, hash)
+
+	name := fmt.Sprintf("%s_%06d_%s_%s", now.Format("20060102T150405.000Z"), seq, endpointName, hash)
+	if trimmed := sanitize(suffix); trimmed != "" {
+		name += "_" + trimmed
+	}
+	name += ".json"
+
 	_ = store.WriteFileAtomically(filepath.Join(dir, name), body, 0o600)
 }
 
