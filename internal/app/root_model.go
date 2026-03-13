@@ -2948,6 +2948,8 @@ func (m *rootModel) viewCardDetail() string {
 		renderActionRow(styles, m.cardSelected, m.container.Config.SaveSearchedCardsDefault, closeHotkey, addHotkey),
 		styles.Muted.Render(hints),
 	)
+	detailInnerHeight := max(1, topHeight-4) // card border + padding consume 4 rows.
+	lines = clampLines(lines, detailInnerHeight, styles.Muted.Render("…"))
 	details := styles.Card.Copy().Width(detailsWidth).Height(topHeight).Render(strings.Join(lines, "\n"))
 	imagePane := m.renderCardImagePane(imageWidth, topHeight)
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top, imagePane, " ", details)
@@ -3542,6 +3544,19 @@ func colorizeCardDetailLine(styles uitheme.Styles, line string) string {
 		valueStyle = styles.Value.Copy().Bold(true)
 	}
 	return labelText + " " + valueStyle.Render(value)
+}
+
+func clampLines(lines []string, limit int, overflowMarker string) []string {
+	if limit <= 0 || len(lines) <= limit {
+		return lines
+	}
+	if limit == 1 {
+		return []string{overflowMarker}
+	}
+	out := make([]string, 0, limit)
+	out = append(out, lines[:limit-1]...)
+	out = append(out, overflowMarker)
+	return out
 }
 
 func (m *rootModel) statusPulse(styles uitheme.Styles, kind string) string {
