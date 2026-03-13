@@ -3262,15 +3262,19 @@ func detailLayout(width int, height int) (imageWidth int, detailsWidth int, topH
 		}
 	}
 
-	imageWidth = (contentWidth * 24) / 100
-	// Ensure enough width so a portrait card can use the available height
-	// without becoming a narrow, squished column.
-	minImageFromHeight := int(math.Round(float64(max(6, topHeight-4))*1.30)) + 4
-	if imageWidth < minImageFromHeight {
-		imageWidth = minImageFromHeight
+	// Size image pane from available height so portrait cards fill vertically
+	// and avoid large empty side gutters.
+	usableImageHeight := max(6, topHeight-4) // border + pane padding consume 4 rows.
+	imageWidth = int(math.Round(float64(usableImageHeight)*1.44)) + 4
+	if imageWidth < 14 {
+		imageWidth = 14
 	}
-	if imageWidth < 16 {
-		imageWidth = 16
+	maxImageWidth := (contentWidth * 40) / 100
+	if maxImageWidth < 18 {
+		maxImageWidth = 18
+	}
+	if imageWidth > maxImageWidth {
+		imageWidth = maxImageWidth
 	}
 	detailsWidth = contentWidth - imageWidth - 1
 	if detailsWidth < 20 {
