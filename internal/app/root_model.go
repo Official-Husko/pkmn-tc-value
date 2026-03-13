@@ -3070,7 +3070,8 @@ func (m *rootModel) renderRecentSalesPane(width int, height int) string {
 	if innerWidth < 8 {
 		innerWidth = 8
 	}
-	maxRows := height - 5
+	innerHeight := max(1, height-4) // border + padding consume 4 rows.
+	maxRows := innerHeight - 2      // header + divider.
 	if maxRows < 1 {
 		maxRows = 1
 	}
@@ -3248,19 +3249,37 @@ func detailLayout(width int, height int) (imageWidth int, detailsWidth int, topH
 		totalHeight = 40
 	}
 
-	topHeight = (totalHeight * 42) / 100
-	if topHeight < 10 {
-		topHeight = 10
+	// Make the image/details row much larger so the card renders roughly 2x bigger.
+	topHeight = (totalHeight * 84) / 100
+	if topHeight < 12 {
+		topHeight = 12
 	}
-	if topHeight > 20 {
-		topHeight = 20
+	if topHeight > 32 {
+		topHeight = 32
 	}
 	bottomHeight = totalHeight - topHeight - 1
 	if bottomHeight < 6 {
 		bottomHeight = 6
 		topHeight = totalHeight - bottomHeight - 1
-		if topHeight < 8 {
-			topHeight = 8
+		if topHeight < 10 {
+			topHeight = 10
+		}
+	}
+	// Keep enough room for at least 9 sales rows:
+	// innerHeight = height-4, rows = innerHeight-2 => rows = height-6, so need height >= 15.
+	minBottomHeight := 15
+	if totalHeight < minBottomHeight+10+1 {
+		minBottomHeight = max(6, totalHeight-10-1)
+	}
+	if bottomHeight < minBottomHeight {
+		bottomHeight = minBottomHeight
+		topHeight = totalHeight - bottomHeight - 1
+		if topHeight < 10 {
+			topHeight = 10
+			bottomHeight = totalHeight - topHeight - 1
+			if bottomHeight < 6 {
+				bottomHeight = 6
+			}
 		}
 	}
 
