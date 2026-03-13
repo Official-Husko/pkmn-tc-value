@@ -18,7 +18,14 @@ func NewCardsRepo(s *store.Store) *CardsRepo {
 }
 
 func (r *CardsRepo) GetBySetAndNumber(setID, number string) (domain.Card, bool, error) {
-	canonical := util.NormalizeCardNumber(number)
+	lookupKeys := make(map[string]struct{}, 2)
+	for _, key := range lookupCardNumberVariants(number) {
+		lookupKeys[key] = struct{}{}
+	}
+	if len(lookupKeys) == 0 {
+		return domain.Card{}, false, nil
+	}
+
 	var matches []domain.Card
 	err := r.store.Read(func(db *store.DB) error {
 		cards := db.CardsBySet[setID]
@@ -28,7 +35,10 @@ func (r *CardsRepo) GetBySetAndNumber(setID, number string) (domain.Card, bool, 
 		set := db.Sets[setID]
 		for _, card := range cards {
 			card = hydrateCard(card, set)
-			if util.NormalizeCardNumber(card.Number) == canonical {
+			if !cardNumberMatchesLookup(card.Number, lookupKeys) {
+				continue
+			}
+			if util.NormalizeCardNumber(card.Number) != "" {
 				matches = append(matches, card)
 			}
 		}
@@ -87,4 +97,46 @@ func hydrateCard(card domain.Card, set domain.Set) domain.Card {
 		card.ReleaseDate = set.ReleaseDate
 	}
 	return card
+}
+
+func cardNumberMatchesLookup(number string, lookupKeys map[string]struct{}) bool {
+	for _, key := range lookupCardNumberVariants(number) {
+		if _, ok := lookupKeys[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func lookupCardNumberVariants(number string) []string {
+	canonical := util.NormalizeCardNumber(number)
+	if canonical == "" {
+		return nil
+	}
+	trimmed := trimTrailingNumericZeros(canonical)
+	if trimmed != canonical {
+		return []string{canonical, trimmed}
+	}
+	return []string{canonical}
+}
+
+func trimTrailingNumericZeros(value string) string {
+	if value == "" {
+		return ""
+	}
+	digitStart := len(value)
+	for i := len(value) - 1; i >= 0; i-- {
+		if value[i] < '0' || value[i] > '9' {
+			break
+		}
+		digitStart = i
+	}
+	if digitStart == len(value) {
+		return value
+	}
+	digits := strings.TrimLeft(value[digitStart:], "0")
+	if digits == "" {
+		digits = "0"
+	}
+	return value[:digitStart] + digits
 }

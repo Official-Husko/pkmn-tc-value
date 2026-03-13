@@ -23,7 +23,7 @@ func DetailLines(card domain.Card) []string {
 		lines = append(lines, "Set EN: "+card.SetEnglishName)
 	}
 	if strings.TrimSpace(card.Rarity) != "" {
-		lines = append(lines, "Rarity: "+card.Rarity)
+		lines = append(lines, "Rarity: "+util.RarityDisplay(card.Rarity))
 	}
 	lines = append(lines,
 		"Market: "+util.FormatMoney(card.UngradedPrice),

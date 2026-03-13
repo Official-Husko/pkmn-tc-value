@@ -2643,10 +2643,15 @@ func (m *rootModel) mainMenuStripe(width int) string {
 
 func (m *rootModel) viewInput() string {
 	styles := m.styles()
-	lines := []string{
+	lines := make([]string, 0, 12)
+	if m.inputKind == inputCardLookup {
+		lines = append(lines, m.renderCardLookupSummaryLines(styles)...)
+		lines = append(lines, "")
+	}
+	lines = append(lines,
 		styles.Muted.Render(m.inputDescription),
 		m.input.View(),
-	}
+	)
 	if m.inputError != "" {
 		lines = append(lines, "", styles.Warn.Render(m.inputError))
 	}
@@ -2656,6 +2661,110 @@ func (m *rootModel) viewInput() string {
 		strings.ToUpper(m.displayHotkey("back", "esc")),
 	)))
 	return m.renderScreenShell(styles, "Input", m.inputTitle, strings.Join(lines, "\n"))
+}
+
+type cardLookupSummary struct {
+	setTotal           int
+	setSecret          int
+	ownedSetEntries    int
+	ownedSetCards      int
+	collectionEntries  int
+	collectionCards    int
+	collectionValue    float64
+	hasCollectionValue bool
+}
+
+func (m *rootModel) renderCardLookupSummaryLines(styles uitheme.Styles) []string {
+	summary, err := m.loadCardLookupSummary()
+	if err != nil {
+		return []string{styles.Warn.Render("Set summary unavailable: " + err.Error())}
+	}
+
+	setCountStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Gold)
+	secretCountStyle := styles.Value.Copy().Bold(true).Foreground(lipgloss.Color("#A855F7"))
+	ownedCountStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Green)
+	collectionCountStyle := styles.Value.Copy().Bold(true).Foreground(uitheme.Blue)
+	valueText := "N/A"
+	valueStyle := styles.Muted
+	if summary.hasCollectionValue {
+		valueText = util.FormatMoney(&domain.Money{Amount: summary.collectionValue, Currency: "USD"})
+		valueStyle = styles.Success
+	}
+
+	return []string{
+		styles.Label.Render("Set:") + " " +
+			setCountStyle.Render(strconv.Itoa(summary.setTotal)) + styles.Muted.Render(" total • ") +
+			secretCountStyle.Render(strconv.Itoa(summary.setSecret)) + styles.Muted.Render(" secret"),
+		styles.Label.Render("Owned:") + " " +
+			ownedCountStyle.Render(strconv.Itoa(summary.ownedSetCards)) + styles.Muted.Render(" cards (") +
+			ownedCountStyle.Render(strconv.Itoa(summary.ownedSetEntries)) + styles.Muted.Render(" entries) in this set"),
+		styles.Label.Render("Collection:") + " " +
+			collectionCountStyle.Render(strconv.Itoa(summary.collectionCards)) + styles.Muted.Render(" cards (") +
+			collectionCountStyle.Render(strconv.Itoa(summary.collectionEntries)) + styles.Muted.Render(" entries) • Value ") +
+			valueStyle.Render(valueText),
+	}
+}
+
+func (m *rootModel) loadCardLookupSummary() (cardLookupSummary, error) {
+	summary := cardLookupSummary{}
+	err := m.container.Store.Read(func(db *store.DB) error {
+		setCards := db.CardsBySet[m.selectedSet.ID]
+		summary.setTotal = m.selectedSet.Total
+		if summary.setTotal <= 0 {
+			summary.setTotal = m.selectedSet.Cards.Total
+		}
+		if summary.setTotal <= 0 {
+			summary.setTotal = len(setCards)
+		}
+
+		for _, card := range setCards {
+			if card.Secret {
+				summary.setSecret++
+			}
+		}
+		if summary.setSecret == 0 && m.selectedSet.Cards.Total > 0 && m.selectedSet.Cards.Official > 0 && m.selectedSet.Cards.Total >= m.selectedSet.Cards.Official {
+			derivedSecret := m.selectedSet.Cards.Total - m.selectedSet.Cards.Official
+			if derivedSecret > 0 {
+				summary.setSecret = derivedSecret
+			}
+		}
+		if summary.setSecret > summary.setTotal && summary.setTotal > 0 {
+			summary.setSecret = summary.setTotal
+		}
+
+		cardByID := make(map[string]domain.Card, 1024)
+		for _, cards := range db.CardsBySet {
+			for _, card := range cards {
+				cardByID[card.ID] = card
+			}
+		}
+
+		summary.collectionEntries = len(db.Collection)
+		for cardID, entry := range db.Collection {
+			if entry.Quantity <= 0 {
+				continue
+			}
+			summary.collectionCards += entry.Quantity
+
+			card, ok := cardByID[cardID]
+			if !ok {
+				continue
+			}
+			if card.SetID == m.selectedSet.ID {
+				summary.ownedSetEntries++
+				summary.ownedSetCards += entry.Quantity
+			}
+			if card.UngradedPrice != nil {
+				summary.collectionValue += card.UngradedPrice.Amount * float64(entry.Quantity)
+				summary.hasCollectionValue = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return cardLookupSummary{}, err
+	}
+	return summary, nil
 }
 
 func (m *rootModel) viewMessage() string {
@@ -3554,7 +3663,7 @@ func colorizeCardDetailLine(styles uitheme.Styles, line string) string {
 	case "English", "Set EN":
 		valueStyle = styles.Muted
 	case "Rarity":
-		valueStyle = styles.Label
+		valueStyle = rarityValueStyle(styles, util.RarityAbbreviation(value))
 	case "Market", "PSA 10", "Ungraded Smart":
 		valueStyle = styles.Success
 	case "Low":
@@ -3563,6 +3672,11 @@ func colorizeCardDetailLine(styles uitheme.Styles, line string) string {
 		valueStyle = styles.Value.Copy().Bold(true)
 	}
 	return labelText + " " + valueStyle.Render(value)
+}
+
+func rarityValueStyle(styles uitheme.Styles, abbreviation string) lipgloss.Style {
+	_ = abbreviation
+	return styles.Value.Copy().Foreground(lipgloss.Color("#22D3EE")).Bold(true)
 }
 
 func clampLines(lines []string, limit int, overflowMarker string) []string {
