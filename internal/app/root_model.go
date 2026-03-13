@@ -1014,7 +1014,7 @@ func (m *rootModel) onMenuSelect(value string) tea.Cmd {
 	case menuAPIKeys:
 		switch {
 		case value == "api_add":
-			m.openTextSetting("api_add_key", "Add API Key", "Paste a PokemonPriceTracker API key.", "", false)
+			m.openTextSetting("api_add_key", "Add API Key", "Paste a Pokewallet API key.", "", false)
 			return nil
 		case value == "api_back":
 			m.openSettingsMenu()
@@ -1213,7 +1213,7 @@ func (m *rootModel) refreshMainMenuSnapshot() {
 		snapshot.CatalogProvider = "tcgdex"
 	}
 	if snapshot.PriceProvider == "" {
-		snapshot.PriceProvider = "pokemonpricetracker"
+		snapshot.PriceProvider = "pokewallet"
 	}
 	m.mainSnapshot = snapshot
 }
@@ -1649,7 +1649,7 @@ func (m *rootModel) openAPIKeysMenu() {
 	options := make([]menuOption, 0, len(m.settingsDraft.APIKeys)+2)
 	options = append(options, menuOption{
 		Label:       "Add API key",
-		Description: "Add a new PokemonPriceTracker API key",
+		Description: "Add a new Pokewallet API key",
 		Value:       "api_add",
 	})
 	for idx, key := range m.settingsDraft.APIKeys {
@@ -1673,7 +1673,7 @@ func (m *rootModel) openAPIKeysMenu() {
 	m.setMenu(
 		menuAPIKeys,
 		"API Keys",
-		"Manage API keys used for PokemonPriceTracker requests.",
+		"Manage API keys used for Pokewallet requests.",
 		options,
 		false,
 		14,
@@ -1744,7 +1744,7 @@ func (m *rootModel) openBuildFullConfirmMenu() {
 		"!! Warning !!",
 		"",
 		"Doing a full Database Build can take a long time depending on internet speed!",
-		"We recommend at least 10 api keys being setup for pokeprice.",
+		"We recommend setting at least a few Pokewallet API keys for heavy full builds.",
 		"",
 		"Are you sure you want to continue?",
 	}, "\n")
@@ -1770,7 +1770,7 @@ func (m *rootModel) clearCatalogData() tea.Cmd {
 		db.SyncState.LastSuccessfulStartupSyncAt = nil
 		db.SyncState.LastViewedSetID = ""
 		db.SyncState.CatalogProvider = "tcgdex"
-		db.SyncState.PriceProvider = "pokemonpricetracker"
+		db.SyncState.PriceProvider = "pokewallet"
 		return nil
 	}); err != nil {
 		m.openMessage("Database Actions", "Failed to clear database: "+err.Error(), nextSettingsMenu)
@@ -2232,7 +2232,7 @@ func (m *rootModel) viewBuildFullConfirmScreen(styles uitheme.Styles) string {
 		warnStyle.Render("!! Warning !!"),
 		"",
 		warnStyle.Render("Doing a full Database Build can take a long time depending on internet speed!"),
-		warnStyle.Render("We recommend at least 10 api keys being setup for pokeprice."),
+		warnStyle.Render("We recommend setting at least a few Pokewallet API keys for heavy full builds."),
 		"",
 		warnStyle.Render("Are you sure you want to continue?"),
 	}
@@ -2913,19 +2913,20 @@ func (m *rootModel) viewSetSync() string {
 
 func (m *rootModel) viewCardDetail() string {
 	styles := m.styles()
-	leftWidth, rightWidth, panelHeight := detailLayout(m.width, m.height)
-	statusLine := styles.Muted.Render(m.cardStatus)
+	imageWidth, detailsWidth, topHeight, bottomHeight := detailLayout(m.width, m.height)
+	statusText := m.cardStatusText()
+	statusLine := styles.Muted.Render(statusText)
 	switch {
-	case strings.Contains(strings.ToLower(m.cardStatus), "failed"):
-		statusLine = styles.Warn.Render(m.cardStatus)
-	case strings.Contains(strings.ToLower(m.cardStatus), "updated"), strings.Contains(strings.ToLower(m.cardStatus), "saved"):
-		statusLine = styles.Success.Render(m.cardStatus)
+	case strings.Contains(strings.ToLower(statusText), "failed"):
+		statusLine = styles.Warn.Render(statusText)
+	case strings.Contains(strings.ToLower(statusText), "updated"), strings.Contains(strings.ToLower(statusText), "saved"):
+		statusLine = styles.Success.Render(statusText)
 	}
 	statusKind := "info"
-	if strings.Contains(strings.ToLower(m.cardStatus), "failed") {
+	if strings.Contains(strings.ToLower(statusText), "failed") {
 		statusKind = "warn"
 	}
-	if strings.Contains(strings.ToLower(m.cardStatus), "updated") || strings.Contains(strings.ToLower(m.cardStatus), "saved") {
+	if strings.Contains(strings.ToLower(statusText), "updated") || strings.Contains(strings.ToLower(statusText), "saved") {
 		statusKind = "ok"
 	}
 	closeHotkey := strings.ToUpper(m.displayHotkey("card_close", "c"))
@@ -2935,20 +2936,40 @@ func (m *rootModel) viewCardDetail() string {
 	if !m.container.Config.SaveSearchedCardsDefault {
 		hints = fmt.Sprintf("%s/%s: Close  •  %s: Add", backHotkey, closeHotkey, addHotkey)
 	}
-	lines := append(
-		viewmodel.DetailLines(m.card),
+	lines := make([]string, 0, 24)
+	for _, line := range viewmodel.DetailLines(m.card) {
+		lines = append(lines, colorizeCardDetailLine(styles, line))
+	}
+	lines = append(
+		lines,
 		"",
 		"Status: "+m.statusPulse(styles, statusKind)+" "+statusLine,
 		"",
 		renderActionRow(styles, m.cardSelected, m.container.Config.SaveSearchedCardsDefault, closeHotkey, addHotkey),
 		styles.Muted.Render(hints),
 	)
-	details := styles.Card.Copy().Width(rightWidth).Height(panelHeight).Render(strings.Join(lines, "\n"))
-	title := styles.Title.Render("Card Detail")
-	imagePane := m.renderCardImagePane(leftWidth, panelHeight)
-	layout := lipgloss.JoinHorizontal(lipgloss.Top, imagePane, " ", details)
+	details := styles.Card.Copy().Width(detailsWidth).Height(topHeight).Render(strings.Join(lines, "\n"))
+	imagePane := m.renderCardImagePane(imageWidth, topHeight)
+	topRow := lipgloss.JoinHorizontal(lipgloss.Top, imagePane, " ", details)
+	topRowWidth := lipgloss.Width(topRow)
+	minTopWidth := imageWidth + 1 + detailsWidth
+	if topRowWidth < minTopWidth {
+		topRowWidth = minTopWidth
+	}
+	if m.width > 0 {
+		maxPanelWidth := m.width - 8
+		if maxPanelWidth < 24 {
+			maxPanelWidth = 24
+		}
+		if topRowWidth > maxPanelWidth {
+			topRowWidth = maxPanelWidth
+		}
+	}
+	recentSales := m.renderRecentSalesPane(topRowWidth, bottomHeight)
+	title := m.renderCardDetailTitleLine()
+	layout := lipgloss.JoinVertical(lipgloss.Left, topRow, " ", recentSales)
 	view := lipgloss.NewStyle().Padding(1, 2).Render(title + "\n\n" + layout)
-	return view + m.renderCardImageOverlay(leftWidth, panelHeight)
+	return view + m.renderCardImageOverlay(imageWidth, topHeight)
 }
 
 func (m *rootModel) renderScreenShell(styles uitheme.Styles, section string, subtitle string, body string) string {
@@ -2989,15 +3010,16 @@ func (m *rootModel) renderCardImagePane(width int, height int) string {
 	default:
 		content = styles.Muted.Render("Image unavailable")
 	}
-	return styles.Card.Copy().Padding(0).Width(width).Height(height).Render(content)
+	return styles.Card.Copy().Padding(1).Width(width).Height(height).Render(content)
 }
 
 func (m *rootModel) renderCardImageOverlay(panelWidth int, panelHeight int) string {
 	if !m.cardImageReady || m.container.Renderer == nil {
 		return ""
 	}
-	imageWidth := panelWidth - 2
-	imageHeight := panelHeight - 2
+	// Border (2) + image padding (2) from renderCardImagePane.
+	imageWidth := panelWidth - 4
+	imageHeight := panelHeight - 4
 	if imageWidth < 4 || imageHeight < 4 {
 		return ""
 	}
@@ -3006,9 +3028,18 @@ func (m *rootModel) renderCardImageOverlay(panelWidth int, panelHeight int) stri
 	if err != nil || strings.TrimSpace(rendered) == "" || rendered == "[image unavailable]" {
 		return ""
 	}
+	horizontalPad := 0
+	if imageWidth > renderWidth {
+		horizontalPad = (imageWidth - renderWidth) / 2
+	}
+	verticalPad := 0
+	if imageHeight > renderHeight {
+		verticalPad = (imageHeight - renderHeight) / 2
+	}
 
-	const imageTop = 5
-	const imageLeft = 4
+	// Base cursor offsets for the image panel plus inner padding.
+	imageTop := 6 + verticalPad
+	imageLeft := 5 + horizontalPad
 
 	var b strings.Builder
 	b.WriteString(m.container.Renderer.ClearAllString())
@@ -3017,6 +3048,152 @@ func (m *rootModel) renderCardImageOverlay(panelWidth int, panelHeight int) stri
 	b.WriteString(rendered)
 	b.WriteString("\033[u")
 	return b.String()
+}
+
+func (m *rootModel) renderRecentSalesPane(width int, height int) string {
+	styles := m.styles()
+	if m.width > 0 {
+		maxPanelWidth := m.width - 8
+		if maxPanelWidth < 24 {
+			maxPanelWidth = 24
+		}
+		if width > maxPanelWidth {
+			width = maxPanelWidth
+		}
+	}
+	if width < 12 {
+		width = 12
+	}
+	innerWidth := width - 4
+	if innerWidth < 8 {
+		innerWidth = 8
+	}
+	maxRows := height - 5
+	if maxRows < 1 {
+		maxRows = 1
+	}
+
+	lines := []string{m.renderRecentSalesHeaderLine(innerWidth)}
+	lines = append(lines, styles.Muted.Render(strings.Repeat("─", innerWidth)))
+	recentSales := prioritizedRecentSales(m.card.RecentSales, maxRows)
+	if len(recentSales) == 0 {
+		lines = append(lines, styles.Muted.Render("No sold listings yet."))
+		return styles.Card.Copy().Width(width).Height(height).Render(strings.Join(lines, "\n"))
+	}
+
+	for i := 0; i < len(recentSales); i++ {
+		sale := recentSales[i]
+		grade := saleGradeLabel(sale)
+		gradeStyle := styles.Label
+		switch saleGradeBucket(sale.Grade) {
+		case salesBucketPSA10:
+			gradeStyle = styles.Success
+		case salesBucketPSA9:
+			gradeStyle = styles.Value.Copy().Bold(true)
+		}
+		price := util.FormatMoney(sale.Price)
+		dateText := "--"
+		if sale.SoldAt != nil {
+			dateText = sale.SoldAt.Local().Format("2006-01-02")
+		}
+		title := strings.TrimSpace(sale.Title)
+		if title == "" {
+			title = "Listing"
+		}
+
+		row := lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			gradeStyle.Render(grade),
+			"  ",
+			styles.Success.Render(price),
+			"  ",
+			styles.Muted.Render(dateText),
+			"  ",
+			styles.Value.Render(title),
+		)
+		lines = append(lines, ansi.Truncate(row, innerWidth, ""))
+	}
+
+	return styles.Card.Copy().Width(width).Height(height).Render(strings.Join(lines, "\n"))
+}
+
+func (m *rootModel) cardStatusText() string {
+	status := strings.TrimSpace(m.cardStatus)
+	statusLower := strings.ToLower(status)
+	if strings.Contains(statusLower, "refreshing") || strings.Contains(statusLower, "failed") {
+		return status
+	}
+	if m.card.PriceCheckedAt != nil {
+		return "Updated " + util.HumanizeAge(m.card.PriceCheckedAt)
+	}
+	if status == "" {
+		return "Status unavailable"
+	}
+	return status
+}
+
+func (m *rootModel) renderCardDetailTitleLine() string {
+	styles := m.styles()
+	return styles.Title.Render("Card Detail")
+}
+
+func (m *rootModel) renderRecentSalesHeaderLine(innerWidth int) string {
+	styles := m.styles()
+	left := styles.Label.Render("Recent Sales")
+	quickSales := m.renderCardQuickSales()
+	if strings.TrimSpace(quickSales) == "" {
+		return ansi.Truncate(left, innerWidth, "")
+	}
+
+	leftWidth := lipgloss.Width(left)
+	quickWidth := lipgloss.Width(quickSales)
+	if quickWidth > innerWidth-2 {
+		quickSales = ansi.Truncate(quickSales, innerWidth-2, "")
+		quickWidth = lipgloss.Width(quickSales)
+	}
+
+	start := (innerWidth - quickWidth) / 2
+	minStart := leftWidth + 2
+	if start < minStart {
+		start = minStart
+	}
+	if start+quickWidth > innerWidth {
+		start = innerWidth - quickWidth
+	}
+	if start < leftWidth {
+		start = leftWidth
+	}
+
+	gap := start - leftWidth
+	if gap < 1 {
+		gap = 1
+	}
+	row := left + strings.Repeat(" ", gap) + quickSales
+	return ansi.Truncate(row, innerWidth, "")
+}
+
+func (m *rootModel) renderCardQuickSales() string {
+	styles := m.styles()
+	highest := highestSalesByBucket(m.card.RecentSales)
+	if len(highest) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, 3)
+	appendPart := func(label string, bucket string, labelStyle lipgloss.Style) {
+		priceText := "n/a"
+		priceStyle := styles.Muted
+		if price, ok := highest[bucket]; ok && price != nil {
+			priceText = util.FormatMoney(price)
+			priceStyle = styles.Success
+		}
+		parts = append(parts, labelStyle.Render(label+":")+" "+priceStyle.Render(priceText))
+	}
+
+	appendPart("Ungraded", salesBucketUngraded, styles.Label)
+	appendPart("PSA 10", salesBucketPSA10, styles.Success)
+	appendPart("PSA 9", salesBucketPSA9, styles.Value.Copy().Bold(true))
+	return strings.Join(parts, "   ")
 }
 
 func renderActionRow(styles uitheme.Styles, selected int, autoSave bool, closeHotkey string, addHotkey string) string {
@@ -3050,39 +3227,84 @@ func renderActionRow(styles uitheme.Styles, selected int, autoSave bool, closeHo
 	)
 }
 
-func detailLayout(width int, height int) (left int, right int, panelHeight int) {
+func detailLayout(width int, height int) (imageWidth int, detailsWidth int, topHeight int, bottomHeight int) {
 	if width <= 0 {
 		width = 120
 	}
 	if height <= 0 {
 		height = 40
 	}
-	contentWidth := width - 5
-	if contentWidth < 24 {
-		contentWidth = 24
+	contentWidth := width - 10
+	if contentWidth < 40 {
+		contentWidth = 40
 	}
-	left = (contentWidth * 48) / 100
-	right = contentWidth - left - 1
-	if left < 10 {
-		left = 10
-		right = contentWidth - left - 1
+	totalHeight := height - 10
+	if totalHeight < 12 {
+		totalHeight = 12
 	}
-	if right < 10 {
-		right = 10
-		left = contentWidth - right - 1
-		if left < 10 {
-			left = contentWidth / 2
-			right = contentWidth - left - 1
+	if totalHeight > 40 {
+		totalHeight = 40
+	}
+
+	topHeight = (totalHeight * 42) / 100
+	if topHeight < 10 {
+		topHeight = 10
+	}
+	if topHeight > 20 {
+		topHeight = 20
+	}
+	bottomHeight = totalHeight - topHeight - 1
+	if bottomHeight < 6 {
+		bottomHeight = 6
+		topHeight = totalHeight - bottomHeight - 1
+		if topHeight < 8 {
+			topHeight = 8
 		}
 	}
-	panelHeight = height - 8
-	if panelHeight < 8 {
-		panelHeight = 8
+
+	imageWidth = (contentWidth * 24) / 100
+	// Ensure enough width so a portrait card can use the available height
+	// without becoming a narrow, squished column.
+	minImageFromHeight := int(math.Round(float64(max(6, topHeight-4))*1.30)) + 4
+	if imageWidth < minImageFromHeight {
+		imageWidth = minImageFromHeight
 	}
-	if panelHeight > 36 {
-		panelHeight = 36
+	if imageWidth < 16 {
+		imageWidth = 16
 	}
-	return left, right, panelHeight
+	detailsWidth = contentWidth - imageWidth - 1
+	if detailsWidth < 20 {
+		detailsWidth = 20
+		imageWidth = contentWidth - detailsWidth - 1
+		if imageWidth < 12 {
+			imageWidth = 12
+			detailsWidth = contentWidth - imageWidth - 1
+		}
+	}
+
+	totalWidth := imageWidth + detailsWidth + 1
+	overflow := totalWidth - contentWidth
+	if overflow > 0 {
+		reduce := func(v *int, min int) int {
+			if overflow <= 0 {
+				return 0
+			}
+			canReduce := *v - min
+			if canReduce < 0 {
+				canReduce = 0
+			}
+			cut := canReduce
+			if cut > overflow {
+				cut = overflow
+			}
+			*v -= cut
+			overflow -= cut
+			return cut
+		}
+		reduce(&detailsWidth, 20)
+		reduce(&imageWidth, 12)
+	}
+	return imageWidth, detailsWidth, topHeight, bottomHeight
 }
 
 func fitImageCells(imagePath string, maxWidth int, maxHeight int) (int, int) {
@@ -3101,18 +3323,8 @@ func fitImageCells(imagePath string, maxWidth int, maxHeight int) (int, int) {
 		return maxWidth, maxHeight
 	}
 
-	features := termimg.QueryTerminalFeatures()
 	cellWidth := float64(termimg.DefaultFontWidth)
 	cellHeight := float64(termimg.DefaultFontHeight)
-	if features != nil {
-		if features.FontWidth > 0 {
-			cellWidth = float64(features.FontWidth)
-		}
-		if features.FontHeight > 0 {
-			cellHeight = float64(features.FontHeight)
-		}
-	}
-
 	imageAspect := float64(cfg.Width) / float64(cfg.Height)
 	widgetAspect := (float64(maxWidth) * cellWidth) / (float64(maxHeight) * cellHeight)
 
@@ -3130,6 +3342,202 @@ func fitImageCells(imagePath string, maxWidth int, maxHeight int) (int, int) {
 		renderHeight = 1
 	}
 	return renderWidth, renderHeight
+}
+
+const (
+	salesBucketUngraded = "ungraded"
+	salesBucketPSA10    = "psa10"
+	salesBucketPSA9     = "psa9"
+)
+
+func sortedRecentSales(sales []domain.SoldListing) []domain.SoldListing {
+	if len(sales) == 0 {
+		return nil
+	}
+	out := make([]domain.SoldListing, len(sales))
+	copy(out, sales)
+	sort.SliceStable(out, func(i, j int) bool {
+		left := time.Time{}
+		right := time.Time{}
+		if out[i].SoldAt != nil {
+			left = out[i].SoldAt.UTC()
+		}
+		if out[j].SoldAt != nil {
+			right = out[j].SoldAt.UTC()
+		}
+		if !left.Equal(right) {
+			return left.After(right)
+		}
+
+		leftAmount := 0.0
+		rightAmount := 0.0
+		if out[i].Price != nil {
+			leftAmount = out[i].Price.Amount
+		}
+		if out[j].Price != nil {
+			rightAmount = out[j].Price.Amount
+		}
+		return leftAmount > rightAmount
+	})
+	return out
+}
+
+func prioritizedRecentSales(sales []domain.SoldListing, limit int) []domain.SoldListing {
+	ordered := sortedRecentSales(sales)
+	if len(ordered) == 0 || limit <= 0 {
+		return nil
+	}
+
+	grouped := map[string][]domain.SoldListing{
+		salesBucketUngraded: {},
+		salesBucketPSA10:    {},
+		salesBucketPSA9:     {},
+	}
+	other := make([]domain.SoldListing, 0, len(ordered))
+	for _, sale := range ordered {
+		bucket := saleGradeBucket(sale.Grade)
+		if bucket == "" {
+			other = append(other, sale)
+			continue
+		}
+		grouped[bucket] = append(grouped[bucket], sale)
+	}
+
+	if len(grouped[salesBucketUngraded]) == 0 && len(grouped[salesBucketPSA10]) == 0 && len(grouped[salesBucketPSA9]) == 0 && len(other) == 0 {
+		return nil
+	}
+
+	out := make([]domain.SoldListing, 0, limit)
+	appendFromGroup := func(bucket string, count int) int {
+		if count <= 0 || len(out) >= limit {
+			return 0
+		}
+		items := grouped[bucket]
+		maxTake := count
+		if maxTake > len(items) {
+			maxTake = len(items)
+		}
+		remaining := limit - len(out)
+		if maxTake > remaining {
+			maxTake = remaining
+		}
+		if maxTake <= 0 {
+			return 0
+		}
+		out = append(out, items[:maxTake]...)
+		grouped[bucket] = items[maxTake:]
+		return maxTake
+	}
+
+	minimum := 3
+	missingToUngraded := 0
+	for _, bucket := range []string{salesBucketUngraded, salesBucketPSA10, salesBucketPSA9} {
+		taken := appendFromGroup(bucket, minimum)
+		if taken < minimum {
+			missingToUngraded += minimum - taken
+		}
+	}
+	appendFromGroup(salesBucketUngraded, missingToUngraded)
+	appendFromGroup(salesBucketUngraded, limit)
+	appendFromGroup(salesBucketPSA10, limit)
+	appendFromGroup(salesBucketPSA9, limit)
+
+	if len(out) < limit && len(other) > 0 {
+		remaining := limit - len(out)
+		if remaining > len(other) {
+			remaining = len(other)
+		}
+		out = append(out, other[:remaining]...)
+	}
+	return out
+}
+
+func saleGradeBucket(grade string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(grade))
+	if normalized == "" {
+		return salesBucketUngraded
+	}
+	normalized = strings.ReplaceAll(normalized, "_", "")
+	normalized = strings.ReplaceAll(normalized, "-", "")
+	normalized = strings.Join(strings.Fields(normalized), "")
+	switch normalized {
+	case "UNGRADED", "RAW":
+		return salesBucketUngraded
+	case "PSA10":
+		return salesBucketPSA10
+	case "PSA9":
+		return salesBucketPSA9
+	default:
+		return ""
+	}
+}
+
+func saleGradeLabel(sale domain.SoldListing) string {
+	switch saleGradeBucket(sale.Grade) {
+	case salesBucketUngraded:
+		return "Ungraded"
+	case salesBucketPSA10:
+		return "PSA 10"
+	case salesBucketPSA9:
+		return "PSA 9"
+	default:
+		grade := strings.TrimSpace(sale.Grade)
+		if grade == "" {
+			return "Sale"
+		}
+		return grade
+	}
+}
+
+func highestSalesByBucket(sales []domain.SoldListing) map[string]*domain.Money {
+	out := make(map[string]*domain.Money, 3)
+	for _, sale := range sales {
+		if sale.Price == nil {
+			continue
+		}
+		bucket := saleGradeBucket(sale.Grade)
+		if bucket == "" {
+			continue
+		}
+		current := out[bucket]
+		if current == nil || sale.Price.Amount > current.Amount {
+			price := *sale.Price
+			out[bucket] = &price
+		}
+	}
+	return out
+}
+
+func colorizeCardDetailLine(styles uitheme.Styles, line string) string {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return ""
+	}
+	parts := strings.SplitN(trimmed, ":", 2)
+	if len(parts) != 2 {
+		return styles.Value.Render(trimmed)
+	}
+
+	label := strings.TrimSpace(parts[0])
+	value := strings.TrimSpace(parts[1])
+	labelText := styles.Label.Render(label + ":")
+
+	valueStyle := styles.Value
+	switch label {
+	case "Name":
+		valueStyle = styles.Title.Copy().Bold(true)
+	case "English", "Set EN":
+		valueStyle = styles.Muted
+	case "Rarity":
+		valueStyle = styles.Label
+	case "Market", "PSA 10", "Ungraded Smart":
+		valueStyle = styles.Success
+	case "Low":
+		valueStyle = styles.Warn
+	case "Sales", "Population":
+		valueStyle = styles.Value.Copy().Bold(true)
+	}
+	return labelText + " " + valueStyle.Render(value)
 }
 
 func (m *rootModel) statusPulse(styles uitheme.Styles, kind string) string {

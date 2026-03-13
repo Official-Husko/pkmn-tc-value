@@ -25,7 +25,9 @@ func (r *CardsRepo) GetBySetAndNumber(setID, number string) (domain.Card, bool, 
 		if cards == nil {
 			return nil
 		}
+		set := db.Sets[setID]
 		for _, card := range cards {
+			card = hydrateCard(card, set)
 			if util.NormalizeCardNumber(card.Number) == canonical {
 				matches = append(matches, card)
 			}
@@ -47,8 +49,9 @@ func (r *CardsRepo) GetBySetAndNumber(setID, number string) (domain.Card, bool, 
 func (r *CardsRepo) ListBySet(setID string) ([]domain.Card, error) {
 	var cards []domain.Card
 	err := r.store.Read(func(db *store.DB) error {
+		set := db.Sets[setID]
 		for _, card := range db.CardsBySet[setID] {
-			cards = append(cards, card)
+			cards = append(cards, hydrateCard(card, set))
 		}
 		return nil
 	})
@@ -65,4 +68,23 @@ func cardPriority(card domain.Card) int {
 		score += 5
 	}
 	return score
+}
+
+func hydrateCard(card domain.Card, set domain.Set) domain.Card {
+	if strings.TrimSpace(card.SetName) == "" {
+		card.SetName = set.Name
+	}
+	if strings.TrimSpace(card.SetEnglishName) == "" {
+		card.SetEnglishName = set.EnglishName
+	}
+	if strings.TrimSpace(card.SetCode) == "" {
+		card.SetCode = set.SetCode
+	}
+	if strings.TrimSpace(card.Language) == "" {
+		card.Language = set.Language
+	}
+	if strings.TrimSpace(card.ReleaseDate) == "" {
+		card.ReleaseDate = set.ReleaseDate
+	}
+	return card
 }

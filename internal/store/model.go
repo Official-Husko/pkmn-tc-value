@@ -33,7 +33,7 @@ func NewDB() *DB {
 		},
 		SyncState: domain.SyncState{
 			CatalogProvider: "tcgdex",
-			PriceProvider:   "pokemonpricetracker",
+			PriceProvider:   "pokewallet",
 		},
 		APIKeyUsage: make(map[string]domain.APIKeyUsage),
 		Sets:        make(map[string]domain.Set),

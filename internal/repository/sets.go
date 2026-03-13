@@ -22,6 +22,9 @@ func (r *SetsRepo) List() ([]domain.Set, error) {
 	err := r.store.Read(func(db *store.DB) error {
 		sets = make([]domain.Set, 0, len(db.Sets))
 		for _, set := range db.Sets {
+			if set.Total == 0 && set.Cards.Total > 0 {
+				set.Total = set.Cards.Total
+			}
 			if cached := len(db.CardsBySet[set.ID]); cached > 0 {
 				set.Total = cached
 			}
@@ -49,6 +52,9 @@ func (r *SetsRepo) Get(id string) (domain.Set, bool, error) {
 	err := r.store.Read(func(db *store.DB) error {
 		set, ok = db.Sets[id]
 		if ok {
+			if set.Total == 0 && set.Cards.Total > 0 {
+				set.Total = set.Cards.Total
+			}
 			if cached := len(db.CardsBySet[id]); cached > 0 {
 				set.Total = cached
 			}

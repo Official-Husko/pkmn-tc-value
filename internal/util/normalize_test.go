@@ -8,6 +8,7 @@ func TestNormalizeCardNumber(t *testing.T) {
 		"SVP 001": "SVP001",
 		"tg01":    "TG01",
 		"GG-35":   "GG35",
+		"073/190": "073",
 	}
 	for input, want := range cases {
 		if got := NormalizeCardNumber(input); got != want {

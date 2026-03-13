@@ -140,7 +140,7 @@ func (r *Resolver) MapSetCards(ctx context.Context, set domain.Set, cards []doma
 		}
 		mapped[remoteID] = CardEnrichment{
 			PriceProviderSetID:  resolved.ID,
-			PriceProviderCardID: card.TCGPlayerID.String(),
+			PriceProviderCardID: normalizeStoredProviderCardID(card.ID.String()),
 			SetEnglishName:      resolved.EnglishName,
 			EnglishName:         strings.TrimSpace(englishName),
 			TotalSetNumber:      strings.TrimSpace(card.TotalSetNumber),
@@ -319,6 +319,14 @@ func normalizeTrackerCardNumber(value string) string {
 		trimmed = trimmed[:slash]
 	}
 	return util.NormalizeCardNumber(trimmed)
+}
+
+func normalizeStoredProviderCardID(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if strings.HasPrefix(trimmed, "pk_") {
+		return strings.TrimPrefix(trimmed, "pk_")
+	}
+	return trimmed
 }
 
 func (r *Resolver) EnsureLinkedCard(ctx context.Context, set domain.Set, card domain.Card, cfg config.Config) (CardEnrichment, error) {

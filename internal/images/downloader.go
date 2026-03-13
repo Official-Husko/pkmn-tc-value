@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,8 @@ import (
 type Downloader struct {
 	client            *http.Client
 	cache             *Cache
+	apiKeys           []string
+	userAgent         string
 	backupImageSource bool
 	debug             bool
 	debugLogPath      string
@@ -31,10 +34,19 @@ type Downloader struct {
 
 var errNoImageCandidates = errors.New("no image candidates available")
 
-func NewDownloader(client *http.Client, cache *Cache, backupImageSource bool, debug bool, debugLogPath string) *Downloader {
+func NewDownloader(client *http.Client, cache *Cache, apiKeys []string, userAgent string, backupImageSource bool, debug bool, debugLogPath string) *Downloader {
+	cleanKeys := make([]string, 0, len(apiKeys))
+	for _, key := range apiKeys {
+		trimmed := strings.TrimSpace(key)
+		if trimmed != "" {
+			cleanKeys = append(cleanKeys, trimmed)
+		}
+	}
 	return &Downloader{
 		client:            client,
 		cache:             cache,
+		apiKeys:           cleanKeys,
+		userAgent:         strings.TrimSpace(userAgent),
 		backupImageSource: backupImageSource,
 		debug:             debug,
 		debugLogPath:      debugLogPath,
@@ -88,9 +100,57 @@ func (d *Downloader) FetchTempPNG(ctx context.Context, card domain.Card) (string
 }
 
 func (d *Downloader) fetchAsPNG(ctx context.Context, imageURL string) ([]byte, error) {
+	data, err := d.fetchRawImage(ctx, imageURL)
+	if err != nil {
+		return nil, err
+	}
+	converted, err := convertToPNG(data)
+	if err != nil {
+		return nil, fmt.Errorf("decode and convert image: %w", err)
+	}
+	return converted, nil
+}
+
+func (d *Downloader) fetchRawImage(ctx context.Context, imageURL string) ([]byte, error) {
+	parsedURL, err := url.Parse(strings.TrimSpace(imageURL))
+	if err != nil {
+		return nil, fmt.Errorf("invalid image URL: %w", err)
+	}
+	if isPokewalletImageEndpoint(parsedURL) {
+		return d.fetchPokewalletImage(ctx, parsedURL.String())
+	}
+	return d.fetchImageWithKey(ctx, parsedURL.String(), "")
+}
+
+func (d *Downloader) fetchPokewalletImage(ctx context.Context, imageURL string) ([]byte, error) {
+	if len(d.apiKeys) == 0 {
+		return nil, fmt.Errorf("no pokewallet api keys configured for image request")
+	}
+	var lastErr error
+	for _, apiKey := range d.apiKeys {
+		data, err := d.fetchImageWithKey(ctx, imageURL, apiKey)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("pokewallet image request failed")
+}
+
+func (d *Downloader) fetchImageWithKey(ctx context.Context, imageURL string, apiKey string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build image request: %w", err)
+	}
+	if d.userAgent != "" {
+		req.Header.Set("User-Agent", d.userAgent)
+	}
+	if strings.TrimSpace(apiKey) != "" {
+		req.Header.Set("X-API-Key", apiKey)
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
@@ -98,17 +158,14 @@ func (d *Downloader) fetchAsPNG(ctx context.Context, imageURL string) ([]byte, e
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("fetch image failed: %s", resp.Status)
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("fetch image failed: %s (%s)", resp.Status, strings.TrimSpace(string(body)))
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read image: %w", err)
 	}
-	converted, err := convertToPNG(data)
-	if err != nil {
-		return nil, fmt.Errorf("decode and convert image: %w", err)
-	}
-	return converted, nil
+	return data, nil
 }
 
 func (d *Downloader) fetchCardImageAsPNG(ctx context.Context, card domain.Card) ([]byte, error) {
@@ -161,17 +218,11 @@ func (d *Downloader) debugf(format string, args ...any) {
 }
 
 func imageURLCandidates(card domain.Card, useBackup bool) []string {
+	pokewalletPrimary := pokewalletImageURL(card)
 	primary := tcgdexImageURL(card)
-	if !useBackup {
-		if strings.TrimSpace(primary) == "" {
-			return nil
-		}
-		return []string{primary}
-	}
 
-	out := make([]string, 0, 3)
+	out := make([]string, 0, 4)
 	seen := make(map[string]struct{})
-
 	appendURL := func(v string) {
 		value := strings.TrimSpace(v)
 		if value == "" {
@@ -184,10 +235,35 @@ func imageURLCandidates(card domain.Card, useBackup bool) []string {
 		out = append(out, value)
 	}
 
+	if !useBackup {
+		appendURL(primary)
+		// Keep image downloads free by default; authenticated Pokewallet image fetches are backup-only.
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	}
+
 	appendURL(primary)
+	appendURL(pokewalletPrimary)
 	appendURL(scrydexImageURL(card))
 	appendURL(card.ImageURL)
 	return out
+}
+
+func pokewalletImageURL(card domain.Card) string {
+	id := strings.TrimSpace(card.PriceProviderCardID)
+	if id == "" {
+		return ""
+	}
+	if strings.HasPrefix(id, "pk_") {
+		return fmt.Sprintf("https://api.pokewallet.io/images/%s?size=high", url.PathEscape(id))
+	}
+	// Stored provider IDs strip "pk_". Add it back for TCGPlayer-linked cards.
+	if strings.TrimSpace(card.TCGPlayerID) != "" && !isDigits(id) {
+		id = "pk_" + id
+	}
+	return fmt.Sprintf("https://api.pokewallet.io/images/%s?size=high", url.PathEscape(id))
 }
 
 func tcgdexImageURL(card domain.Card) string {
@@ -229,6 +305,26 @@ func isJapaneseLanguage(value string) bool {
 		return true
 	}
 	return strings.Contains(normalized, "japanese")
+}
+
+func isPokewalletImageEndpoint(parsedURL *url.URL) bool {
+	if parsedURL == nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsedURL.Hostname()))
+	if host != "api.pokewallet.io" {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(parsedURL.Path), "/images/")
+}
+
+func isDigits(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	_, err := strconv.Atoi(trimmed)
+	return err == nil
 }
 
 func convertToPNG(input []byte) ([]byte, error) {

@@ -1,0 +1,64 @@
+{
+  "pokemon_card_rarities": [
+    {
+      "name": "Common",
+      "abbreviation": "C",
+      "symbol": "●"
+    },
+    {
+      "name": "Uncommon",
+      "abbreviation": "U",
+      "symbol": "◆"
+    },
+    {
+      "name": "Rare",
+      "abbreviation": "R",
+      "symbol": "★"
+    },
+    {
+      "name": "Double Rare",
+      "abbreviation": "RR",
+      "symbol": "★★"
+    },
+    {
+      "name": "Art Rare",
+      "abbreviation": "AR",
+      "symbol": "★"
+    },
+    {
+      "name": "Super Rare",
+      "abbreviation": "SR",
+      "symbol": "★"
+    },
+    {
+      "name": "Special Art Rare",
+      "abbreviation": "SAR",
+      "symbol": "★"
+    },
+    {
+      "name": "Ultra Rare",
+      "abbreviation": "UR",
+      "symbol": "★"
+    },
+    {
+      "name": "Hyper Rare",
+      "abbreviation": "HR",
+      "symbol": "★"
+    },
+    {
+      "name": "Secret Rare",
+      "abbreviation": "SR",
+      "symbol": "★"
+    },
+    {
+      "name": "Illustration Rare",
+      "abbreviation": "IR",
+      "symbol": "★"
+    },
+    {
+      "name": "Special Illustration Rare",
+      "abbreviation": "SIR",
+      "symbol": "★"
+    }
+  ]
+}

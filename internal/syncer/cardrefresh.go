@@ -12,6 +12,7 @@ import (
 	"github.com/Official-Husko/pkmn-tc-value/internal/images"
 	"github.com/Official-Husko/pkmn-tc-value/internal/pricing"
 	"github.com/Official-Husko/pkmn-tc-value/internal/store"
+	"github.com/Official-Husko/pkmn-tc-value/internal/util"
 )
 
 type CardRefreshService struct {
@@ -44,11 +45,27 @@ func (s *CardRefreshService) Refresh(ctx context.Context, card domain.Card, set 
 		card.UngradedPrice = snapshot.Ungraded
 		card.LowPrice = snapshot.Low
 		card.PSA10Price = snapshot.PSA10
+		card.GradeWorth = snapshot.GradeWorth
+		card.UngradedSmartPrice = snapshot.UngradedSmartPrice
+		card.UngradedSmartMeta = snapshot.UngradedSmartMeta
+		card.SalesVelocity = snapshot.SalesVelocity
+		card.TotalSales = snapshot.TotalSales
+		card.TotalSalesValue = snapshot.TotalSalesValue
+		card.RecentSales = snapshot.RecentSales
+		card.Population = snapshot.Population
 		card.PriceSourceURL = snapshot.SourceURL
 		card.PriceCheckedAt = &snapshot.CheckedAt
 		persisted.UngradedPrice = snapshot.Ungraded
 		persisted.LowPrice = snapshot.Low
 		persisted.PSA10Price = snapshot.PSA10
+		persisted.GradeWorth = snapshot.GradeWorth
+		persisted.UngradedSmartPrice = snapshot.UngradedSmartPrice
+		persisted.UngradedSmartMeta = snapshot.UngradedSmartMeta
+		persisted.SalesVelocity = snapshot.SalesVelocity
+		persisted.TotalSales = snapshot.TotalSales
+		persisted.TotalSalesValue = snapshot.TotalSalesValue
+		persisted.RecentSales = snapshot.RecentSales
+		persisted.Population = snapshot.Population
 		persisted.PriceSourceURL = snapshot.SourceURL
 		persisted.PriceCheckedAt = &snapshot.CheckedAt
 		if strings.TrimSpace(snapshot.PriceProviderCardID) != "" {
@@ -58,10 +75,6 @@ func (s *CardRefreshService) Refresh(ctx context.Context, card domain.Card, set 
 		if strings.TrimSpace(snapshot.TCGPlayerID) != "" {
 			card.TCGPlayerID = snapshot.TCGPlayerID
 			persisted.TCGPlayerID = snapshot.TCGPlayerID
-			if strings.TrimSpace(card.PriceProviderCardID) == "" {
-				card.PriceProviderCardID = snapshot.TCGPlayerID
-				persisted.PriceProviderCardID = snapshot.TCGPlayerID
-			}
 		}
 		if strings.TrimSpace(snapshot.SetName) != "" {
 			card.SetName = snapshot.SetName
@@ -72,8 +85,8 @@ func (s *CardRefreshService) Refresh(ctx context.Context, card domain.Card, set 
 			persisted.Name = snapshot.CardName
 		}
 		if strings.TrimSpace(snapshot.CardNumber) != "" {
-			card.Number = snapshot.CardNumber
-			persisted.Number = snapshot.CardNumber
+			card.Number = util.CardLocalNumber(snapshot.CardNumber)
+			persisted.Number = util.CardLocalNumber(snapshot.CardNumber)
 		}
 		if strings.TrimSpace(snapshot.TotalSetNumber) != "" {
 			card.TotalSetNumber = snapshot.TotalSetNumber

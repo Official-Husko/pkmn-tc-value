@@ -22,6 +22,7 @@ import (
 // TODO: Save last fetched card prices to card db to display collection worth in main menu total and after selecting a set
 // TODO: Cleanup config file, proper formatting with {} and such, nested and more organized
 // TODO: Parallel support for build full db
+// TODO: Fix not downloaded images not being checked for, check if all images exist else try to redownload them on set open
 func main() {
 	if err := app.Run(context.Background()); err != nil {
 		log.Fatal(err)

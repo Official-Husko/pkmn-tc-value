@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -15,8 +16,9 @@ import (
 )
 
 const (
-	v2BaseURL     = "https://www.pokemonpricetracker.com/api/v2"
-	publicBaseURL = "https://www.pokemonpricetracker.com/api"
+	pokewalletBaseURL        = "https://api.pokewallet.io"
+	pokepricePublicBaseURL   = "https://www.pokemonpricetracker.com/api"
+	pokepricePublicV2BaseURL = "https://www.pokemonpricetracker.com/api/v2"
 )
 
 type Client struct {
@@ -48,13 +50,8 @@ func (c *Client) KeyStatuses() []KeyStatus {
 }
 
 func (c *Client) FetchSets(ctx context.Context, language string, cfg config.Config) ([]trackerSet, error) {
-	values := url.Values{}
-	values.Set("language", normalizeAPILanguage(language))
-	values.Set("limit", "500")
-	values.Set("offset", "0")
-	endpoint := v2BaseURL + "/sets?" + values.Encode()
-
-	body, err := c.doV2(ctx, endpoint, cfg)
+	endpoint := pokewalletBaseURL + "/sets"
+	body, err := c.doAuthed(ctx, endpoint, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -62,55 +59,124 @@ func (c *Client) FetchSets(ctx context.Context, language string, cfg config.Conf
 	if err := json.Unmarshal(body, &env); err != nil {
 		return nil, fmt.Errorf("decode sets response: %w", err)
 	}
-	return env.Data, nil
+
+	wantLang := normalizeWalletLanguage(language)
+	sets := make([]trackerSet, 0, len(env.Data))
+	for _, set := range env.Data {
+		lang := normalizeWalletLanguageCode(set.Language)
+		if wantLang != "" && lang != "" && wantLang != lang {
+			continue
+		}
+		setID := strings.TrimSpace(set.SetID.String())
+		sets = append(sets, trackerSet{
+			ID:          stringValue(setID),
+			TCGPlayerID: stringValue(setID),
+			Name:        strings.TrimSpace(set.Name),
+			Series:      "",
+			ReleaseDate: strings.TrimSpace(set.ReleaseDate),
+			CardCount:   set.CardCount,
+			Language:    normalizeAPILanguageFromWallet(lang),
+			SetCode:     strings.TrimSpace(set.SetCode),
+		})
+	}
+	sort.SliceStable(sets, func(i, j int) bool {
+		if sets[i].ReleaseDate == sets[j].ReleaseDate {
+			return sets[i].Name < sets[j].Name
+		}
+		return sets[i].ReleaseDate > sets[j].ReleaseDate
+	})
+	return sets, nil
 }
 
 func (c *Client) FetchCardsBySetID(ctx context.Context, language string, setID string, cfg config.Config) ([]trackerCard, error) {
-	return c.fetchCards(ctx, language, map[string]string{
-		"setId": strings.TrimSpace(setID),
-	}, cfg)
+	return c.fetchSetCardsByIdentifier(ctx, language, strings.TrimSpace(setID), cfg)
 }
 
 func (c *Client) FetchCardsBySetName(ctx context.Context, language string, setName string, cfg config.Config) ([]trackerCard, error) {
-	return c.fetchCards(ctx, language, map[string]string{
-		"set": strings.TrimSpace(setName),
-	}, cfg)
+	targetName := strings.TrimSpace(setName)
+	if targetName == "" {
+		return nil, nil
+	}
+	sets, err := c.FetchSets(ctx, language, cfg)
+	if err != nil {
+		return nil, err
+	}
+	normalizedTarget := strings.ToLower(targetName)
+	var match trackerSet
+	found := false
+	for _, set := range sets {
+		name := strings.TrimSpace(set.Name)
+		if strings.EqualFold(name, targetName) {
+			match = set
+			found = true
+			break
+		}
+	}
+	if !found {
+		for _, set := range sets {
+			name := strings.ToLower(strings.TrimSpace(set.Name))
+			if strings.Contains(name, normalizedTarget) || strings.Contains(normalizedTarget, name) {
+				match = set
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		return nil, nil
+	}
+	return c.FetchCardsBySetID(ctx, language, match.ID.String(), cfg)
 }
 
-func (c *Client) fetchCards(ctx context.Context, language string, filters map[string]string, cfg config.Config) ([]trackerCard, error) {
-	offset := 0
+func (c *Client) fetchSetCardsByIdentifier(ctx context.Context, language string, identifier string, cfg config.Config) ([]trackerCard, error) {
+	if strings.TrimSpace(identifier) == "" {
+		return nil, nil
+	}
+
 	limit := 200
-	all := make([]trackerCard, 0, 256)
+	page := 1
+	lang := normalizeWalletLanguage(language)
+	all := make([]trackerCard, 0, limit)
 
 	for {
 		values := url.Values{}
-		values.Set("language", normalizeAPILanguage(language))
+		values.Set("page", strconv.Itoa(page))
 		values.Set("limit", strconv.Itoa(limit))
-		values.Set("offset", strconv.Itoa(offset))
-		values.Set("includeHistory", "false")
-		values.Set("includeEbay", "false")
-		for key, value := range filters {
-			if strings.TrimSpace(value) == "" {
-				continue
-			}
-			values.Set(key, value)
+		if lang != "" {
+			values.Set("language", lang)
 		}
 
-		endpoint := v2BaseURL + "/cards?" + values.Encode()
-		body, err := c.doV2(ctx, endpoint, cfg)
+		endpoint := fmt.Sprintf("%s/sets/%s?%s", pokewalletBaseURL, url.PathEscape(identifier), values.Encode())
+		body, err := c.doAuthed(ctx, endpoint, cfg)
 		if err != nil {
 			return nil, err
 		}
-		page, total, err := decodeCards(body)
-		if err != nil {
-			return nil, err
+
+		var env cardsEnvelope
+		if err := json.Unmarshal(body, &env); err != nil {
+			return nil, fmt.Errorf("decode set cards response: %w", err)
 		}
-		all = append(all, page...)
-		if len(page) < limit {
+
+		if env.Disambiguation && len(env.Matches) > 0 {
+			picked := pickDisambiguatedSetID(env.Matches, lang)
+			if picked == "" {
+				return nil, fmt.Errorf("set %s is ambiguous", identifier)
+			}
+			if picked == identifier {
+				return nil, fmt.Errorf("set %s is ambiguous", identifier)
+			}
+			return c.fetchSetCardsByIdentifier(ctx, language, picked, cfg)
+		}
+
+		for _, card := range env.Cards {
+			all = append(all, walletToTrackerCard(card, env.Set))
+		}
+
+		if len(env.Cards) < limit {
 			break
 		}
-		offset += len(page)
-		if total > 0 && offset >= total {
+		page++
+		if page > 25 {
 			break
 		}
 	}
@@ -119,37 +185,55 @@ func (c *Client) fetchCards(ctx context.Context, language string, filters map[st
 
 func (c *Client) FetchCardByID(ctx context.Context, language string, cardID string, includeEbay bool, cfg config.Config) (trackerCard, error) {
 	values := url.Values{}
-	values.Set("language", normalizeAPILanguage(language))
-	values.Set("cardId", strings.TrimSpace(cardID))
-	values.Set("limit", "1")
-	if includeEbay {
-		values.Set("includeEbay", "true")
-		values.Set("days", "7")
-	} else {
-		values.Set("includeEbay", "false")
+	walletLang := normalizeWalletLanguage(language)
+	if walletLang != "" {
+		values.Set("language", walletLang)
 	}
-	values.Set("includeHistory", "false")
+	endpoint := fmt.Sprintf("%s/cards/%s", pokewalletBaseURL, url.PathEscape(strings.TrimSpace(cardID)))
+	if encoded := values.Encode(); encoded != "" {
+		endpoint += "?" + encoded
+	}
 
-	endpoint := v2BaseURL + "/cards?" + values.Encode()
-	body, err := c.doV2(ctx, endpoint, cfg)
+	body, err := c.doAuthed(ctx, endpoint, cfg)
 	if err != nil {
 		return trackerCard{}, err
 	}
-	cards, _, err := decodeCards(body)
-	if err != nil {
-		return trackerCard{}, err
+
+	var direct walletCard
+	if err := json.Unmarshal(body, &direct); err == nil && strings.TrimSpace(direct.ID) != "" {
+		return walletToTrackerCard(direct, struct {
+			Name       string      `json:"name"`
+			SetCode    string      `json:"set_code"`
+			SetID      stringValue `json:"set_id"`
+			TotalCards int         `json:"total_cards"`
+			Language   string      `json:"language"`
+		}{}), nil
 	}
-	if len(cards) == 0 {
+
+	var wrapped struct {
+		Success bool       `json:"success"`
+		Data    walletCard `json:"data"`
+	}
+	if err := json.Unmarshal(body, &wrapped); err != nil {
+		return trackerCard{}, fmt.Errorf("decode card response: %w", err)
+	}
+	if strings.TrimSpace(wrapped.Data.ID) == "" {
 		return trackerCard{}, fmt.Errorf("card %s not found", cardID)
 	}
-	return cards[0], nil
+	return walletToTrackerCard(wrapped.Data, struct {
+		Name       string      `json:"name"`
+		SetCode    string      `json:"set_code"`
+		SetID      stringValue `json:"set_id"`
+		TotalCards int         `json:"total_cards"`
+		Language   string      `json:"language"`
+	}{}), nil
 }
 
 func (c *Client) FetchPublicDetails(ctx context.Context, language string, cardID string, cfg config.Config) (trackerCard, error) {
 	values := url.Values{}
 	values.Set("days", "30")
 	values.Set("language", normalizeAPILanguage(language))
-	endpoint := fmt.Sprintf("%s/cards/%s/details?%s", publicBaseURL, url.PathEscape(strings.TrimSpace(cardID)), values.Encode())
+	endpoint := fmt.Sprintf("%s/cards/%s/details?%s", pokepricePublicBaseURL, url.PathEscape(strings.TrimSpace(cardID)), values.Encode())
 
 	body, err := c.doPublic(ctx, endpoint, cfg)
 	if err != nil {
@@ -173,9 +257,9 @@ func (c *Client) FetchInternalHistory(ctx context.Context, language string, card
 	values.Set("language", normalizeAPILanguage(language))
 	values.Set("cardId", strings.TrimSpace(cardID))
 	values.Set("days", "7")
-	endpoint := v2BaseURL + "/internal/card-history?" + values.Encode()
+	endpoint := pokepricePublicV2BaseURL + "/internal/card-history?" + values.Encode()
 
-	body, err := c.doV2(ctx, endpoint, cfg)
+	body, err := c.doPublic(ctx, endpoint, cfg)
 	if err != nil {
 		return historyEnvelope{}, err
 	}
@@ -186,7 +270,7 @@ func (c *Client) FetchInternalHistory(ctx context.Context, language string, card
 	return out, nil
 }
 
-func (c *Client) doV2(ctx context.Context, endpoint string, cfg config.Config) ([]byte, error) {
+func (c *Client) doAuthed(ctx context.Context, endpoint string, cfg config.Config) ([]byte, error) {
 	if c.keys == nil {
 		return nil, ErrNoUsableAPIKey
 	}
@@ -204,8 +288,8 @@ func (c *Client) doV2(ctx context.Context, endpoint string, cfg config.Config) (
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if c.logger != nil {
-		c.logger.LogHTTP("pokemonpricetracker-v2", endpoint, resp.StatusCode, resp.Status, body)
-		c.logger.LogJSON("pokemonpricetracker-v2", endpoint, body)
+		c.logger.LogHTTP("pokewallet", endpoint, resp.StatusCode, resp.Status, body)
+		c.logger.LogJSON("pokewallet", endpoint, body)
 	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("request %s failed: %s (%s)", endpoint, resp.Status, strings.TrimSpace(string(body)))
@@ -242,33 +326,157 @@ func (c *Client) doPublic(ctx context.Context, endpoint string, cfg config.Confi
 
 func normalizeAPILanguage(language string) string {
 	switch strings.ToLower(strings.TrimSpace(language)) {
-	case "ja", "japanese":
+	case "ja", "japanese", "jap":
 		return "japanese"
 	default:
 		return "english"
 	}
 }
 
-func decodeCards(body []byte) ([]trackerCard, int, error) {
-	var env cardsEnvelope
-	if err := json.Unmarshal(body, &env); err != nil {
-		return nil, 0, fmt.Errorf("decode cards response: %w", err)
+func normalizeWalletLanguage(language string) string {
+	switch strings.ToLower(strings.TrimSpace(language)) {
+	case "ja", "japanese", "jap":
+		return "jap"
+	case "english", "en", "eng":
+		return "eng"
+	default:
+		return ""
 	}
-	total := env.Metadata.Total
-	if total == 0 {
-		total = env.Metadata.Pagination.Total
+}
+
+func normalizeWalletLanguageCode(code string) string {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "ja", "japanese", "jap":
+		return "jap"
+	case "en", "english", "eng":
+		return "eng"
+	default:
+		return ""
 	}
-	if len(env.Data) == 0 {
-		return nil, total, nil
+}
+
+func normalizeAPILanguageFromWallet(code string) string {
+	if normalizeWalletLanguageCode(code) == "jap" {
+		return "japanese"
+	}
+	return "english"
+}
+
+func pickDisambiguatedSetID(matches []walletSet, walletLanguage string) string {
+	if len(matches) == 0 {
+		return ""
+	}
+	for _, match := range matches {
+		if walletLanguage != "" && normalizeWalletLanguageCode(match.Language) == walletLanguage {
+			return strings.TrimSpace(match.SetID.String())
+		}
+	}
+	return strings.TrimSpace(matches[0].SetID.String())
+}
+
+func walletToTrackerCard(card walletCard, setMeta struct {
+	Name       string      `json:"name"`
+	SetCode    string      `json:"set_code"`
+	SetID      stringValue `json:"set_id"`
+	TotalCards int         `json:"total_cards"`
+	Language   string      `json:"language"`
+}) trackerCard {
+	number := strings.TrimSpace(card.CardInfo.CardNumber)
+	total := strings.TrimSpace(card.CardInfo.TotalSet)
+	if total == "" {
+		if slash := strings.Index(number, "/"); slash > 0 && slash+1 < len(number) {
+			total = strings.TrimSpace(number[slash+1:])
+		}
 	}
 
-	var cards []trackerCard
-	if err := json.Unmarshal(env.Data, &cards); err == nil {
-		return cards, total, nil
+	variants := make(map[string]variantPrice)
+	priceData := trackerPriceData{}
+	tcgURL := ""
+
+	if card.TCGPlayer != nil {
+		tcgURL = strings.TrimSpace(card.TCGPlayer.URL)
+		for _, item := range card.TCGPlayer.Prices {
+			name := strings.TrimSpace(item.SubTypeName)
+			if name == "" {
+				name = "Normal"
+			}
+			variants[name] = variantPrice{
+				Printing:    name,
+				MarketPrice: firstNumber(item.MarketPrice, item.MidPrice, item.LowPrice),
+				LowPrice:    item.LowPrice,
+			}
+			if strings.EqualFold(name, "normal") {
+				priceData.Market = firstNumber(item.MarketPrice, item.MidPrice, item.LowPrice)
+				priceData.LowPrice = item.LowPrice
+				priceData.LastUpdated = strings.TrimSpace(item.UpdatedAt)
+			}
+			if priceData.Market == nil {
+				priceData.Market = firstNumber(item.MarketPrice, item.MidPrice, item.LowPrice)
+			}
+			if priceData.LowPrice == nil {
+				priceData.LowPrice = item.LowPrice
+			}
+			if priceData.LastUpdated == "" {
+				priceData.LastUpdated = strings.TrimSpace(item.UpdatedAt)
+			}
+		}
 	}
-	var card trackerCard
-	if err := json.Unmarshal(env.Data, &card); err == nil {
-		return []trackerCard{card}, 1, nil
+
+	if (priceData.Market == nil || priceData.LowPrice == nil) && card.CardMarket != nil {
+		for _, item := range card.CardMarket.Prices {
+			if priceData.Market == nil {
+				priceData.Market = firstNumber(item.Avg, item.Trend, item.Low)
+			}
+			if priceData.LowPrice == nil {
+				priceData.LowPrice = item.Low
+			}
+			if priceData.LastUpdated == "" {
+				priceData.LastUpdated = strings.TrimSpace(item.UpdatedAt)
+			}
+		}
 	}
-	return nil, 0, fmt.Errorf("decode cards payload failed")
+
+	setID := firstNonEmpty(card.CardInfo.SetID.String(), setMeta.SetID.String())
+	setName := firstNonEmpty(card.CardInfo.SetName, setMeta.Name)
+	language := normalizeAPILanguageFromWallet(setMeta.Language)
+
+	return trackerCard{
+		ID:             stringValue(strings.TrimSpace(card.ID)),
+		TCGPlayerID:    stringValue(extractTCGPlayerID(tcgURL)),
+		SetID:          stringValue(setID),
+		SetName:        setName,
+		Name:           firstNonEmpty(card.CardInfo.CleanName, card.CardInfo.Name),
+		CardNumber:     number,
+		TotalSetNumber: total,
+		Rarity:         strings.TrimSpace(card.CardInfo.Rarity),
+		CardType:       strings.TrimSpace(card.CardInfo.CardType),
+		Artist:         "",
+		Language:       language,
+		Prices:         priceData,
+		Variants:       variants,
+	}
+}
+
+func extractTCGPlayerID(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	for i := range parts {
+		if parts[i] != "product" {
+			continue
+		}
+		if i+1 < len(parts) {
+			id := strings.TrimSpace(parts[i+1])
+			if _, err := strconv.Atoi(id); err == nil {
+				return id
+			}
+		}
+	}
+	return ""
 }

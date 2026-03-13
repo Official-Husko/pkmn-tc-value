@@ -46,7 +46,7 @@ func TestValidateFiltersKeyStates(t *testing.T) {
 	ring := NewKeyRing([]string{"good-key", "bad-key", "quota-key"}, 100, repo)
 	client := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			auth := req.Header.Get("Authorization")
+			auth := req.Header.Get("X-API-Key")
 			switch {
 			case strings.Contains(auth, "good-key"):
 				return testResponse(http.StatusOK, `{"success":true}`), nil
@@ -83,7 +83,7 @@ func TestDoRotatesToNextUsableKey(t *testing.T) {
 	ring := NewKeyRing([]string{"bad-key", "good-key"}, 100, repo)
 	client := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			auth := req.Header.Get("Authorization")
+			auth := req.Header.Get("X-API-Key")
 			if strings.Contains(auth, "bad-key") {
 				return testResponse(http.StatusUnauthorized, `{"error":"invalid key"}`), nil
 			}

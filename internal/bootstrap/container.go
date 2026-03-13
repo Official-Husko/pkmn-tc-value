@@ -44,14 +44,14 @@ type Container struct {
 func New(cfg config.Config, paths config.Paths, db *store.Store) *Container {
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	responseLogger := providerslog.New(cfg.Debug, paths.LogsDir)
-	catalogProvider := tcgdex.New(httpClient, responseLogger)
+	catalogProvider := tcgdex.New(httpClient, responseLogger, cfg.APIKeys)
 	apiKeysRepo := repository.NewAPIKeysRepo(db)
 	keyRing := trackerpricing.NewKeyRing(cfg.APIKeys, cfg.APIKeyDailyLimit, apiKeysRepo)
 	trackerClient := trackerpricing.NewClient(httpClient, keyRing, responseLogger)
 	priceBridge := trackerpricing.NewResolver(trackerClient)
 	priceProvider := trackerpricing.NewProvider(trackerClient, priceBridge)
 	cache := images.NewCache(paths.ImageDir)
-	downloader := images.NewDownloader(httpClient, cache, cfg.BackupImageSource, cfg.Debug, paths.DebugLog)
+	downloader := images.NewDownloader(httpClient, cache, cfg.APIKeys, cfg.UserAgent, cfg.BackupImageSource, cfg.Debug, paths.DebugLog)
 
 	return &Container{
 		Config:      cfg,

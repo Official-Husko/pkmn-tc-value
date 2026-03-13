@@ -29,7 +29,7 @@ func Default() Config {
 		Debug:                         false,
 		APIKeys:                       nil,
 		Hotkeys:                       DefaultHotkeys(),
-		APIKeyDailyLimit:              100,
+		APIKeyDailyLimit:              1000,
 		CardRefreshTTLHours:           48,
 		ImagePreviewsEnabled:          true,
 		ImageCaching:                  true,

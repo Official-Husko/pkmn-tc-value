@@ -5,9 +5,20 @@ import (
 	"unicode"
 )
 
+func CardLocalNumber(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return ""
+	}
+	if slash := strings.Index(trimmed, "/"); slash > 0 {
+		trimmed = trimmed[:slash]
+	}
+	return strings.TrimSpace(trimmed)
+}
+
 func NormalizeCardNumber(input string) string {
 	var b strings.Builder
-	for _, r := range strings.TrimSpace(strings.ToUpper(input)) {
+	for _, r := range strings.TrimSpace(strings.ToUpper(CardLocalNumber(input))) {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			b.WriteRune(r)
 		}

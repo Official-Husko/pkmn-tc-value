@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	defaultDailyLimit = 100
-	defaultProbeURL   = "https://www.pokemonpricetracker.com/api/v2/sets?language=english&limit=1&offset=0"
+	defaultDailyLimit = 1000
+	defaultProbeURL   = "https://api.pokewallet.io/sets"
 )
 
 var ErrNoUsableAPIKey = errors.New("no usable API keys available")
@@ -118,6 +118,7 @@ func (k *KeyRing) Validate(ctx context.Context, client *http.Client, userAgent s
 		if strings.TrimSpace(userAgent) != "" {
 			probeReq.Header.Set("User-Agent", userAgent)
 		}
+		probeReq.Header.Set("X-API-Key", state.raw)
 		probeReq.Header.Set("Authorization", "Bearer "+state.raw)
 
 		resp, err := client.Do(probeReq)
@@ -206,6 +207,7 @@ func (k *KeyRing) Do(ctx context.Context, client *http.Client, req *http.Request
 		}
 
 		nextReq := req.Clone(ctx)
+		nextReq.Header.Set("X-API-Key", key.raw)
 		nextReq.Header.Set("Authorization", "Bearer "+key.raw)
 		if strings.TrimSpace(userAgent) != "" {
 			nextReq.Header.Set("User-Agent", userAgent)

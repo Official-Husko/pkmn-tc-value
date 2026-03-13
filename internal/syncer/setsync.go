@@ -195,6 +195,34 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 		if strings.TrimSpace(enrichment.CardType) != "" {
 			cardType = strings.TrimSpace(enrichment.CardType)
 		}
+		hp := strings.TrimSpace(existing.HP)
+		if hp == "" {
+			hp = strings.TrimSpace(remoteCard.HP)
+		}
+		stage := strings.TrimSpace(existing.Stage)
+		if stage == "" {
+			stage = strings.TrimSpace(remoteCard.Stage)
+		}
+		cardText := strings.TrimSpace(existing.CardText)
+		if cardText == "" {
+			cardText = strings.TrimSpace(remoteCard.CardText)
+		}
+		attacks := cloneStrings(existing.Attacks)
+		if len(attacks) == 0 && len(remoteCard.Attacks) > 0 {
+			attacks = cloneStrings(remoteCard.Attacks)
+		}
+		weakness := strings.TrimSpace(existing.Weakness)
+		if weakness == "" {
+			weakness = strings.TrimSpace(remoteCard.Weakness)
+		}
+		resistance := strings.TrimSpace(existing.Resistance)
+		if resistance == "" {
+			resistance = strings.TrimSpace(remoteCard.Resistance)
+		}
+		retreatCost := strings.TrimSpace(existing.RetreatCost)
+		if retreatCost == "" {
+			retreatCost = strings.TrimSpace(remoteCard.RetreatCost)
+		}
 		artist := strings.TrimSpace(existing.Artist)
 		if artist == "" {
 			artist = strings.TrimSpace(remoteCard.Artist)
@@ -238,7 +266,20 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 		}
 		if existing.ID == "" {
 			result.NewCards++
-		} else if existing.Name != remoteCard.Name || existing.Rarity != rarity || existing.ImageBaseURL != imageBaseURL || existing.ImageURL != imageURL || existing.PriceProviderCardID != priceProviderCardID || existing.EnglishName != cardEnglishName {
+		} else if existing.Name != remoteCard.Name ||
+			existing.Rarity != rarity ||
+			existing.ImageBaseURL != imageBaseURL ||
+			existing.ImageURL != imageURL ||
+			existing.PriceProviderCardID != priceProviderCardID ||
+			existing.EnglishName != cardEnglishName ||
+			existing.CardType != cardType ||
+			existing.HP != hp ||
+			existing.Stage != stage ||
+			existing.CardText != cardText ||
+			existing.Weakness != weakness ||
+			existing.Resistance != resistance ||
+			existing.RetreatCost != retreatCost ||
+			!equalStrings(existing.Attacks, attacks) {
 			result.UpdatedCards++
 		}
 		nextCards[remoteCard.ID] = domain.Card{
@@ -252,13 +293,20 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 			Language:            remoteCard.Language,
 			Name:                remoteCard.Name,
 			EnglishName:         cardEnglishName,
-			Number:              remoteCard.Number,
+			Number:              util.CardLocalNumber(remoteCard.Number),
 			TotalSetNumber:      totalSetNumber,
 			ReleaseDate:         remoteCard.ReleaseDate,
 			Secret:              remoteCard.Secret,
 			TCGPlayerID:         tcgPlayerID,
 			Rarity:              rarity,
 			CardType:            cardType,
+			HP:                  hp,
+			Stage:               stage,
+			CardText:            cardText,
+			Attacks:             attacks,
+			Weakness:            weakness,
+			Resistance:          resistance,
+			RetreatCost:         retreatCost,
 			Artist:              artist,
 			ImageBaseURL:        imageBaseURL,
 			ImageURL:            imageURL,
@@ -266,6 +314,14 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 			UngradedPrice:       existing.UngradedPrice,
 			LowPrice:            existing.LowPrice,
 			PSA10Price:          existing.PSA10Price,
+			GradeWorth:          existing.GradeWorth,
+			UngradedSmartPrice:  existing.UngradedSmartPrice,
+			UngradedSmartMeta:   existing.UngradedSmartMeta,
+			SalesVelocity:       existing.SalesVelocity,
+			TotalSales:          existing.TotalSales,
+			TotalSalesValue:     existing.TotalSalesValue,
+			RecentSales:         existing.RecentSales,
+			Population:          existing.Population,
 			PriceSourceURL:      existing.PriceSourceURL,
 			PriceCheckedAt:      existing.PriceCheckedAt,
 			CatalogUpdatedAt:    remoteCard.CatalogUpdatedAt,
@@ -370,6 +426,14 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 				card.UngradedPrice = snapshot.Ungraded
 				card.LowPrice = snapshot.Low
 				card.PSA10Price = snapshot.PSA10
+				card.GradeWorth = snapshot.GradeWorth
+				card.UngradedSmartPrice = snapshot.UngradedSmartPrice
+				card.UngradedSmartMeta = snapshot.UngradedSmartMeta
+				card.SalesVelocity = snapshot.SalesVelocity
+				card.TotalSales = snapshot.TotalSales
+				card.TotalSalesValue = snapshot.TotalSalesValue
+				card.RecentSales = snapshot.RecentSales
+				card.Population = snapshot.Population
 				card.PriceSourceURL = snapshot.SourceURL
 				card.PriceCheckedAt = &snapshot.CheckedAt
 				if strings.TrimSpace(snapshot.PriceProviderCardID) != "" {
@@ -377,9 +441,6 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 				}
 				if strings.TrimSpace(snapshot.TCGPlayerID) != "" {
 					card.TCGPlayerID = snapshot.TCGPlayerID
-					if strings.TrimSpace(card.PriceProviderCardID) == "" {
-						card.PriceProviderCardID = snapshot.TCGPlayerID
-					}
 				}
 				if strings.TrimSpace(snapshot.PriceProviderSetID) != "" {
 					card.PriceProviderSetID = snapshot.PriceProviderSetID
@@ -398,7 +459,7 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 					card.Name = snapshot.CardName
 				}
 				if strings.TrimSpace(snapshot.CardNumber) != "" {
-					card.Number = snapshot.CardNumber
+					card.Number = util.CardLocalNumber(snapshot.CardNumber)
 				}
 				if strings.TrimSpace(snapshot.TotalSetNumber) != "" {
 					card.TotalSetNumber = snapshot.TotalSetNumber
@@ -434,6 +495,7 @@ func (s *SetSyncService) SyncSet(ctx context.Context, setID string, opts SetSync
 		db.CardsBySet[setID] = nextCards
 		setRecord := db.Sets[setID]
 		setRecord.Total = len(nextCards)
+		setRecord.Cards.Total = len(nextCards)
 		if discoveredSetCode != "" {
 			setRecord.SetCode = discoveredSetCode
 		}
@@ -473,4 +535,25 @@ func configuredImageWorkers(configured int, total int) int {
 		configured = total
 	}
 	return configured
+}
+
+func cloneStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
+}
+
+func equalStrings(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }

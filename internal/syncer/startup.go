@@ -67,6 +67,10 @@ func (s *StartupService) Run(ctx context.Context, progress func(StartupProgress)
 			if priceProviderSetCode == "" && ok {
 				priceProviderSetCode = strings.TrimSpace(existing.PriceProviderSetCode)
 			}
+			foreignName := strings.TrimSpace(remote.ForeignName)
+			if foreignName == "" && ok {
+				foreignName = strings.TrimSpace(existing.ForeignName)
+			}
 			englishName := strings.TrimSpace(remote.EnglishName)
 			if englishName == "" && ok {
 				englishName = strings.TrimSpace(existing.EnglishName)
@@ -80,12 +84,14 @@ func (s *StartupService) Run(ctx context.Context, progress func(StartupProgress)
 				ID:                   remote.ID,
 				Language:             remote.Language,
 				Name:                 remote.Name,
+				ForeignName:          foreignName,
 				EnglishName:          englishName,
 				SetCode:              setCode,
 				PriceProviderSetID:   priceProviderSetID,
 				PriceProviderSetName: priceProviderSetName,
 				PriceProviderSetCode: priceProviderSetCode,
 				Series:               remote.Series,
+				Cards:                domain.SetCards{Total: total, Official: printedTotal},
 				PrintedTotal:         printedTotal,
 				Total:                total,
 				ReleaseDate:          remote.ReleaseDate,
